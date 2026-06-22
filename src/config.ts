@@ -1,0 +1,140 @@
+// 設定載入：預設值 → 執行目錄的 config.json（選用）→ 環境變數覆寫（最高優先）。
+// 以 zod 驗證最終結果，確保型別與範圍正確；驗證失敗直接拋錯（fail fast）。
+
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { z } from "zod";
+import type { LogLevel } from "./logger.js";
+
+const LogLevelSchema = z.enum(["debug", "info", "warn", "error"]);
+
+// 序列裝置 vendorId 一律正規化成小寫無 0x 前綴的 4 碼 hex（與 serialport list 回傳一致）。
+// 容忍輸入帶 0x 前綴或大寫（例 "0x05E0" / "5E0" → "05e0"）。
+const VendorIdSchema = z
+  .string()
+  .transform((s) => s.trim().replace(/^0x/i, "").toLowerCase())
+  .pipe(z.string().regex(/^[0-9a-f]{1,4}$/, "vendorId 需為 1~4 碼 hex"))
+  .transform((s) => s.padStart(4, "0"));
+
+// 注意：每個子物件都加 .default({})，這樣即使整段缺席（例如沒有 config.json）
+// zod 也會先填入 {} 再套用各欄位的預設值，而不是把整段視為 Required 報錯。
+export const ConfigSchema = z.object({
+  server: z
+    .object({
+      host: z.string().default("127.0.0.1"),
+      port: z.number().int().min(1).max(65535).default(8788),
+      wsPath: z.string().startsWith("/").default("/ws"),
+    })
+    .default({}),
+  security: z
+    .object({
+      allowedOrigins: z.array(z.string()).default(["http://localhost:5173", "http://localhost:3000"]),
+      allowNoOrigin: z.boolean().default(true),
+    })
+    .default({}),
+  scanner: z
+    .object({
+      enabled: z.boolean().default(true),
+      vendorIds: z.array(VendorIdSchema).default(["05e0"]),
+      baudRate: z.number().int().positive().default(9600),
+      path: z.string().nullable().default(null),
+      keyboardFallback: z.boolean().default(true),
+    })
+    .default({}),
+  scale: z
+    .object({
+      enabled: z.boolean().default(true),
+      baudRate: z.number().int().positive().default(9600),
+      vendorIds: z.array(VendorIdSchema).default(["1a86", "0403", "10c4", "067b"]),
+      path: z.string().nullable().default(null),
+    })
+    .default({}),
+  serial: z
+    .object({
+      pollIntervalMs: z.number().int().min(500).default(2000),
+    })
+    .default({}),
+  keyboard: z
+    .object({
+      enabled: z.boolean().default(true),
+      pressEnter: z.boolean().default(true),
+    })
+    .default({}),
+  logLevel: LogLevelSchema.default("info"),
+});
+
+export type AppConfig = z.infer<typeof ConfigSchema>;
+
+function readConfigFile(): unknown {
+  const path = resolve(process.cwd(), "config.json");
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    // 找不到檔案是正常情形（用預設）；只有 JSON 壞掉才警告。
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn(`[config] 讀取 ${path} 失敗，改用預設值：`, (err as Error).message);
+    }
+    return {};
+  }
+}
+
+// 把環境變數覆寫進 partial config（只覆寫有設定的鍵）。
+function envOverrides(): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const server: Record<string, unknown> = {};
+  const security: Record<string, unknown> = {};
+
+  if (process.env.HOST) server.host = process.env.HOST;
+  if (process.env.PORT) server.port = Number(process.env.PORT);
+  if (Object.keys(server).length) out.server = server;
+
+  if (process.env.WMS_ALLOWED_ORIGINS) {
+    security.allowedOrigins = process.env.WMS_ALLOWED_ORIGINS.split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  if (process.env.ALLOW_NO_ORIGIN) security.allowNoOrigin = parseBool(process.env.ALLOW_NO_ORIGIN);
+  if (Object.keys(security).length) out.security = security;
+
+  if (process.env.KEYBOARD_ENABLED) out.keyboard = { enabled: parseBool(process.env.KEYBOARD_ENABLED) };
+
+  if (process.env.LOG_LEVEL) out.logLevel = process.env.LOG_LEVEL;
+
+  return out;
+}
+
+function parseBool(v: string): boolean {
+  return /^(1|true|yes|on)$/i.test(v.trim());
+}
+
+// 淺層深合併：物件遞迴合併，其餘（含陣列）直接覆寫。
+function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [k, v] of Object.entries(over)) {
+    const cur = out[k];
+    if (isPlainObject(cur) && isPlainObject(v)) {
+      out[k] = deepMerge(cur, v);
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+export function loadConfig(): AppConfig {
+  const fileCfg = readConfigFile();
+  const merged = deepMerge(isPlainObject(fileCfg) ? fileCfg : {}, envOverrides());
+  const result = ConfigSchema.safeParse(merged);
+  if (!result.success) {
+    const issues = result.error.issues.map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
+    throw new Error(`設定驗證失敗：\n${issues}`);
+  }
+  // logLevel 用環境變數覆寫時，若值非法，zod 會擋下；這裡回傳已驗證結果。
+  return result.data;
+}
+
+export type { LogLevel };

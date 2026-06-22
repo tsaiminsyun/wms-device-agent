@@ -1,0 +1,6 @@
+[tools]
+node = "22"
+
+[env]
+# mise 會在進入此專案目錄時自動套用此 node 版本。
+# 第一次使用：`mise install` 安裝對應 node，之後 `mise exec -- npm ...` 或直接 `npm ...`。

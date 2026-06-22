@@ -1,0 +1,7 @@
+# 核准這些相依執行其安裝（build）腳本。pnpm 預設封鎖所有相依的 build 腳本（安全考量），
+# 未核准會以 ERR_PNPM_IGNORED_BUILDS 中止安裝。
+#   - esbuild：tsx / vitest 依賴，須建置平台執行檔。
+#   - @serialport/bindings-cpp：serialport 的原生繫結（實體序列裝置需要，正式環境 Windows 上必要）。
+allowBuilds:
+  '@serialport/bindings-cpp': true
+  esbuild: true

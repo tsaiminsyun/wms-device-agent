@@ -1,0 +1,279 @@
+// 序列裝置驅動共用底座：負責「埠的探索 / 熱插拔 / 開關 / 分行」，
+// 把「哪些埠是我的」與「每一行怎麼處理」交給子類別（掃碼槍 / 電子秤）實作。
+//
+// 探索策略：定時輪詢 SerialPort.list()（跨平台最可靠），與目前已開的埠比對：
+//   - 出現新的、且符合本驅動 selectPort() 的埠 → 開啟並掛上讀取；
+//   - 原本開著但已從清單消失（拔除）→ 關閉並回報 removed。
+// 只讀不寫，降低對其他序列裝置的干擾。
+
+import { LineFramer } from "../../parsing/LineFramer.js";
+import type { DeviceBus } from "../../core/DeviceBus.js";
+import type { DeviceDriver } from "../../core/DeviceManager.js";
+import type { DeviceKind, DeviceStatus } from "../../core/types.js";
+import type { Logger } from "../../logger.js";
+import {
+  loadSerialPort,
+  normalizeHexId,
+  type SerialPortCtor,
+  type SerialPortInfo,
+  type SerialPortInstance,
+} from "./serialLoader.js";
+
+// 跨驅動共享：避免兩個驅動同時搶開同一個實體埠。
+export class PortRegistry {
+  private readonly claimed = new Set<string>();
+  claim(path: string): boolean {
+    if (this.claimed.has(path)) return false;
+    this.claimed.add(path);
+    return true;
+  }
+  release(path: string): void {
+    this.claimed.delete(path);
+  }
+  isClaimed(path: string): boolean {
+    return this.claimed.has(path);
+  }
+}
+
+// 子類別與底座互動的唯一把手（一個實體埠對應一個 handle）。
+export interface SerialPortHandle {
+  readonly uid: string;
+  readonly info: SerialPortInfo;
+  isIdentified(): boolean;
+  markIdentified(): void;
+  pushStatus(status: DeviceStatus, detail: string, nameOverride?: string): void;
+}
+
+interface OpenEntry {
+  port: SerialPortInstance;
+  framer: LineFramer;
+  handle: SerialPortHandle;
+  identified: boolean;
+  closing: boolean;
+}
+
+export interface SerialDriverOptions {
+  baudRate: number;
+  /** 明確指定的埠路徑（設定檔 path）；非 null 時只接這個埠。 */
+  forcedPath: string | null;
+  pollIntervalMs: number;
+}
+
+// 開埠失敗（例：被其他程序鎖住 "Cannot lock port"）後的重試冷卻時間，避免每次輪詢都狂試與洗 log。
+const OPEN_RETRY_COOLDOWN_MS = 5_000;
+
+export abstract class SerialDeviceDriver implements DeviceDriver {
+  abstract readonly name: string;
+  protected abstract readonly kind: DeviceKind;
+  protected abstract readonly displayName: string;
+
+  private readonly open = new Map<string, OpenEntry>(); // path → entry
+  // 開埠失敗後的「下次可重試時間」（path → epoch ms）；冷卻期間輪詢會略過該埠。
+  private readonly retryAfter = new Map<string, number>();
+  private timer: NodeJS.Timeout | null = null;
+  private SerialPort: SerialPortCtor | null = null;
+  private counter = 0;
+  private polling = false;
+
+  protected readonly log: Logger;
+
+  constructor(
+    protected readonly bus: DeviceBus,
+    parentLog: Logger,
+    private readonly registry: PortRegistry,
+    protected readonly options: SerialDriverOptions,
+  ) {
+    this.log = parentLog.child(this.constructor.name);
+  }
+
+  // 子類別：判斷一個（尚未開啟的）埠是否屬於本驅動。
+  protected abstract selectPort(info: SerialPortInfo, normalizedVendorId: string | null): boolean;
+
+  // 子類別：處理一行資料。
+  protected abstract handleLine(line: string, h: SerialPortHandle): void;
+
+  // 子類別可覆寫：埠開啟瞬間的狀態（掃碼槍直接 connected；電子秤先中性、待指紋升級）。
+  protected onOpen(h: SerialPortHandle): void {
+    h.pushStatus("connected", chipText(h.info));
+    this.log.info(`[${h.uid}] 已開啟 ${h.info.path}｜${chipText(h.info) || "無 VID/PID"}`);
+  }
+
+  async start(): Promise<void> {
+    this.SerialPort = await loadSerialPort((m, e) => this.log.warn(m, e));
+    if (!this.SerialPort) {
+      this.log.warn(`${this.displayName} 驅動未啟用（serialport 不可用）。`);
+      return;
+    }
+    await this.poll();
+    this.timer = setInterval(() => void this.poll(), this.options.pollIntervalMs);
+    if (typeof this.timer.unref === "function") this.timer.unref();
+  }
+
+  async stop(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+    const paths = [...this.open.keys()];
+    await Promise.allSettled(
+      paths.map(
+        (path) =>
+          new Promise<void>((res) => {
+            const e = this.open.get(path);
+            if (!e) return res();
+            e.closing = true;
+            try {
+              e.port.close(() => res());
+            } catch {
+              res();
+            }
+          }),
+      ),
+    );
+    for (const path of paths) this.registry.release(path);
+    this.open.clear();
+    this.retryAfter.clear();
+  }
+
+  private async poll(): Promise<void> {
+    if (!this.SerialPort || this.polling) return;
+    this.polling = true;
+    try {
+      const ports = await this.SerialPort.list();
+      const seen = new Set(ports.map((p) => p.path));
+
+      // 偵測拔除：已開啟但清單裡不見了。
+      for (const [path, entry] of this.open) {
+        if (!seen.has(path)) this.detach(path, entry, "拔除");
+      }
+      // 已消失的埠清掉其重試冷卻，之後重插即可立刻嘗試。
+      for (const path of this.retryAfter.keys()) {
+        if (!seen.has(path)) this.retryAfter.delete(path);
+      }
+
+      // 偵測新增：符合條件、尚未開啟、未被其他驅動占用、且不在重試冷卻中。
+      const now = Date.now();
+      for (const info of ports) {
+        if (this.open.has(info.path)) continue;
+        if (this.registry.isClaimed(info.path)) continue;
+        if ((this.retryAfter.get(info.path) ?? 0) > now) continue;
+        const vid = normalizeHexId(info.vendorId);
+        const matched = this.options.forcedPath ? info.path === this.options.forcedPath : this.selectPort(info, vid);
+        if (matched) this.attach(info);
+      }
+    } catch (err) {
+      this.log.warn("列舉序列埠失敗：", err);
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  private attach(info: SerialPortInfo): void {
+    if (!this.SerialPort) return;
+    if (!this.registry.claim(info.path)) return; // 競態：剛被別的驅動搶走
+    const uid = `${this.kind}-${++this.counter}`;
+    const framer = new LineFramer();
+
+    const handle: SerialPortHandle = {
+      uid,
+      info,
+      isIdentified: () => this.open.get(info.path)?.identified ?? false,
+      markIdentified: () => {
+        const e = this.open.get(info.path);
+        if (e) e.identified = true;
+      },
+      pushStatus: (status, detail, nameOverride) => this.pushStatus(uid, status, detail, nameOverride),
+    };
+
+    handle.pushStatus("connecting", `連線中… ${info.path}`);
+
+    let port: SerialPortInstance;
+    try {
+      port = new this.SerialPort({ path: info.path, baudRate: this.options.baudRate, autoOpen: true });
+    } catch (err) {
+      this.log.error(`開啟 ${info.path} 失敗：`, err);
+      this.registry.release(info.path);
+      this.retryAfter.set(info.path, Date.now() + OPEN_RETRY_COOLDOWN_MS);
+      handle.pushStatus("error", `開啟失敗：${(err as Error).message}`);
+      return;
+    }
+
+    const entry: OpenEntry = { port, framer, handle, identified: false, closing: false };
+    this.open.set(info.path, entry);
+
+    port.on("open", () => {
+      this.retryAfter.delete(info.path); // 開成功 → 清掉冷卻
+      this.onOpen(handle);
+    });
+    port.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("latin1"); // 條碼／秤資料多為 ASCII/拉丁，避免多位元組誤切
+      for (const line of framer.push(text)) this.handleLine(line, handle);
+    });
+    port.on("error", (err: Error) => {
+      // 最常見：autoOpen 開埠失敗（"Cannot lock port"＝被其他程序／另一個 agent 實例佔用）。
+      // 此時埠未真正開啟 → 釋放並設冷卻，讓之後輪詢重試（佔用方放開後即自動恢復），不卡在 error。
+      if (!entry.port.isOpen) {
+        this.log.warn(
+          `[${uid}] 開啟 ${info.path} 失敗：${err.message}（${OPEN_RETRY_COOLDOWN_MS / 1000}s 後重試；常見原因：埠被其他程序佔用）`,
+        );
+        this.retryAfter.set(info.path, Date.now() + OPEN_RETRY_COOLDOWN_MS);
+        this.detach(info.path, entry, "開啟失敗");
+        return;
+      }
+      this.log.warn(`[${uid}] 序列錯誤：`, err.message);
+      handle.pushStatus("error", err.message);
+    });
+    port.on("close", () => {
+      if (!entry.closing) this.detach(info.path, entry, "連線關閉");
+    });
+  }
+
+  private detach(path: string, entry: OpenEntry, reason: string): void {
+    if (!this.open.has(path)) return;
+    entry.closing = true;
+    this.open.delete(path);
+    this.registry.release(path);
+    entry.framer.reset();
+    try {
+      // 先移除我們掛的監聽器，避免關閉過程的殘留事件持有 entry/framer 閉包造成熱插拔洩漏。
+      entry.port.removeAllListeners("data");
+      entry.port.removeAllListeners("open");
+      entry.port.removeAllListeners("error");
+      entry.port.removeAllListeners("close");
+      if (entry.port.isOpen) entry.port.close();
+    } catch {
+      /* ignore */
+    }
+    this.log.info(`[${entry.handle.uid}] 移除（${reason}）：${path}`);
+    this.pushStatus(entry.handle.uid, "removed", "");
+  }
+
+  protected pushStatus(uid: string, status: DeviceStatus, detail: string, nameOverride?: string): void {
+    this.bus.emit("device-status", {
+      deviceId: uid,
+      deviceName: nameOverride ?? this.displayName,
+      kind: this.kind,
+      status,
+      detail,
+      ts: Date.now(),
+    });
+  }
+}
+
+// 常見 USB-serial 轉接晶片 VID → 名稱（桌秤多為 RS232 經晶片轉 USB）。
+const SERIAL_CHIPS: Record<string, string> = {
+  "1a86": "CH340",
+  "0403": "FTDI",
+  "10c4": "CP210x",
+  "067b": "PL2303",
+  "05e0": "Zebra/Symbol",
+};
+
+export function chipText(info: SerialPortInfo): string {
+  const vid = normalizeHexId(info.vendorId);
+  if (!vid) return info.manufacturer ?? "";
+  const pid = normalizeHexId(info.productId) ?? "0000";
+  const chip = SERIAL_CHIPS[vid];
+  const id = `${vid}:${pid}`;
+  return chip ? `${chip} (${id})` : `(${id})`;
+}

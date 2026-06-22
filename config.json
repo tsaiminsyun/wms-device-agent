@@ -1,0 +1,42 @@
+{
+  "$comment": "把此檔複製成 config.json 放在執行目錄即可覆寫預設值；環境變數（PORT/HOST/...）的優先序高於此檔。",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8788,
+    "wsPath": "/ws"
+  },
+  "security": {
+    "allowedOrigins": [
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://twwms.daigobang.com"
+    ],
+    "allowNoOrigin": true
+  },
+  "scanner": {
+    "enabled": true,
+    "vendorIds": ["05e0"],
+    "baudRate": 9600,
+    "path": null,
+    "keyboardFallback": true
+  },
+  "scale": {
+    "enabled": true,
+    "baudRate": 9600,
+    "vendorIds": ["1a86", "0403", "10c4", "067b"],
+    "path": null
+  },
+  "serial": {
+    "pollIntervalMs": 2000
+  },
+  "keyboard": {
+    "enabled": true,
+    "pressEnter": true
+  },
+  "mock": {
+    "enabled": false,
+    "autoEmit": false,
+    "intervalMs": 5000
+  },
+  "logLevel": "info"
+}
