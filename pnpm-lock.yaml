@@ -34,6 +34,9 @@ importers:
       '@nut-tree-fork/nut-js':
         specifier: ^4.2.0
         version: 4.2.6
+      node-hid:
+        specifier: ^3.1.0
+        version: 3.3.0
       serialport:
         specifier: ^12.0.0
         version: 12.0.0
@@ -1007,6 +1010,9 @@ packages:
   node-abort-controller@3.1.1:
     resolution: {integrity: sha512-AGK2yQKIjRuqnc6VkX2Xj5d+QW8xZ87pa1UK6yA6ouUyuxfHuMP6umE5QK7UmTeOAymo+Zx1Fxiuw9rVx8taHQ==}
 
+  node-addon-api@3.2.1:
+    resolution: {integrity: sha512-mmcei9JghVNDYydghQmeDX8KoAm0FAiYyIcUt/N4nhyAipB17pllZQDOJD2fotxABnt4Mdz+dKTO7eftLg4d0A==}
+
   node-addon-api@5.0.0:
     resolution: {integrity: sha512-CvkDw2OEnme7ybCykJpVcKH+uAOLV2qLqiyla128dN9TkEWfrYmxG6C2boDe5KcNQqZF3orkqzGgOMvZ/JNekA==}
 
@@ -1024,6 +1030,11 @@ packages:
 
   node-gyp-build@4.6.0:
     resolution: {integrity: sha512-NTZVKn9IylLwUzaKjkas1e4u2DLNcV4rdYagA4PWdPwW87Bi7z+BznyKSRwS/761tV/lzCGXplWsiaMjLqP2zQ==}
+    hasBin: true
+
+  node-hid@3.3.0:
+    resolution: {integrity: sha512-j+dFgJLRAE0nufQKXk3IfS6T6YuHhCgMvz4TrG0sgtb6DSCdYpfJ1etcdmeCmPQjUgO+yo32ktVrRliNs/+fmg==}
+    engines: {node: '>=10.16'}
     hasBin: true
 
   npm-run-path@2.0.2:
@@ -1080,6 +1091,11 @@ packages:
 
   pixelmatch@4.0.2:
     resolution: {integrity: sha512-J8B6xqiO37sU/gkcMglv6h5Jbd9xNER7aHzpfRdNmV4IbQBzBpe4l9XmbG+xPF/znacgu2jfEw+wHffaq/YkXA==}
+    hasBin: true
+
+  pkg-prebuilds@1.1.0:
+    resolution: {integrity: sha512-jyai+KTQ2OwbN6iRYw88XbYOMgtpoSYJpjYebx7d9ihqz3txNi3ucsBt3va0iVWe6svSlaqpijMHFF/eJCMZzg==}
+    engines: {node: '>= 14.15.0'}
     hasBin: true
 
   pngjs@3.4.0:
@@ -2294,6 +2310,9 @@ snapshots:
   node-abort-controller@3.1.1:
     optional: true
 
+  node-addon-api@3.2.1:
+    optional: true
+
   node-addon-api@5.0.0:
     optional: true
 
@@ -2306,6 +2325,12 @@ snapshots:
     optional: true
 
   node-gyp-build@4.6.0:
+    optional: true
+
+  node-hid@3.3.0:
+    dependencies:
+      node-addon-api: 3.2.1
+      pkg-prebuilds: 1.1.0
     optional: true
 
   npm-run-path@2.0.2:
@@ -2364,6 +2389,9 @@ snapshots:
   pixelmatch@4.0.2:
     dependencies:
       pngjs: 3.4.0
+    optional: true
+
+  pkg-prebuilds@1.1.0:
     optional: true
 
   pngjs@3.4.0:

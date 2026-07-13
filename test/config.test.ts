@@ -19,6 +19,15 @@ describe("ConfigSchema", () => {
     expect(c.scanner.vendorIds).toEqual(["05e0", "1a86"]);
   });
 
+  it("hidScanner.usagePages 預設為空（接受任何非鍵盤 collection）", () => {
+    expect(ConfigSchema.parse({}).hidScanner.usagePages).toEqual([]);
+  });
+
+  it("hidScanner.usagePages 接受數字與 0x hex 字串", () => {
+    const c = ConfigSchema.parse({ hidScanner: { usagePages: ["0x8c", 12] } });
+    expect(c.hidScanner.usagePages).toEqual([0x8c, 12]);
+  });
+
   it("部分覆寫保留其餘預設", () => {
     const c = ConfigSchema.parse({ server: { port: 9000 } });
     expect(c.server.port).toBe(9000);

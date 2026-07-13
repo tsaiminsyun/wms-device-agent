@@ -16,6 +16,17 @@ const VendorIdSchema = z
   .pipe(z.string().regex(/^[0-9a-f]{1,4}$/, "vendorId 需為 1~4 碼 hex"))
   .transform((s) => s.padStart(4, "0"));
 
+// HID usage page：接受十進位數字（如 140）或 0x 前綴的 hex 字串（如 "0x8c"）→ 一律轉成數字。
+const UsagePageSchema = z.union([z.number().int().nonnegative(), z.string()]).transform((v, ctx) => {
+  if (typeof v === "number") return v;
+  const m = v.trim().match(/^0x([0-9a-fA-F]+)$/);
+  if (!m) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'usagePage 需為數字或 0x 前綴 hex 字串（如 140 或 "0x8c"）' });
+    return z.NEVER;
+  }
+  return parseInt(m[1] as string, 16);
+});
+
 // 注意：每個子物件都加 .default({})，這樣即使整段缺席（例如沒有 config.json）
 // zod 也會先填入 {} 再套用各欄位的預設值，而不是把整段視為 Required 報錯。
 export const ConfigSchema = z.object({
@@ -39,6 +50,17 @@ export const ConfigSchema = z.object({
       baudRate: z.number().int().positive().default(9600),
       path: z.string().nullable().default(null),
       keyboardFallback: z.boolean().default(true),
+    })
+    .default({}),
+  // HID 掃碼槍（HID-POS / IBM / SNAPI 模式，走 node-hid）。與 CDC 的 scanner 可同時啟用，互不衝突。
+  // usagePages 預設空陣列＝接受該廠牌「任何非鍵盤/滑鼠」的 collection（比照瀏覽器 WebHID 只用 vendorId 過濾）；
+  // 要限定可填如 ["0x8c"]。鍵盤(0x1/0x6)、滑鼠(0x1/0x2)一律排除（OS 保護、node 讀不到）。
+  hidScanner: z
+    .object({
+      enabled: z.boolean().default(true),
+      vendorIds: z.array(VendorIdSchema).default(["05e0"]),
+      usagePages: z.array(UsagePageSchema).default([]),
+      reportHeaderBytes: z.number().int().min(0).max(64).default(4),
     })
     .default({}),
   scale: z

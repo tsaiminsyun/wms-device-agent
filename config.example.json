@@ -20,6 +20,13 @@
     "path": null,
     "keyboardFallback": true
   },
+  "hidScanner": {
+    "$comment": "HID-POS/IBM/SNAPI 模式掃碼槍（node-hid）。usagePages 空=接受該廠牌任何非鍵盤/滑鼠 collection；要限定可填如 [\"0x8c\"]（0x8c=條碼掃描器）。鍵盤模式(usage 0x6)一律排除、node 讀不到。reportHeaderBytes 依機型可能需微調（看 debug log 的原始 report）。",
+    "enabled": true,
+    "vendorIds": ["05e0"],
+    "usagePages": [],
+    "reportHeaderBytes": 4
+  },
   "scale": {
     "enabled": true,
     "baudRate": 9600,

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -iE \"^\\\\s+[A-Za-z].*:$|Product ID|Vendor ID|Manufacturer|Location ID\")",
+      "Bash(grep -iB1 -A6 -E \"symbol|zebra|motorola|barcode|scanner|LS4278|honeywell|datalogic\")"
+    ]
+  }
+}

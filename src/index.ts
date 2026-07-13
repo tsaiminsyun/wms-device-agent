@@ -8,6 +8,7 @@ import { DeviceManager } from "./core/DeviceManager.js";
 import { PortRegistry } from "./devices/serial/SerialDeviceDriver.js";
 import { ScannerDriver } from "./devices/ScannerDriver.js";
 import { ScaleDriver } from "./devices/ScaleDriver.js";
+import { HidScannerDriver } from "./devices/HidScannerDriver.js";
 import { KeyboardEmulator } from "./keyboard/KeyboardEmulator.js";
 import { TrafficCop } from "./TrafficCop.js";
 import { WsServer } from "./server/WsServer.js";
@@ -65,6 +66,16 @@ async function main(): Promise<void> {
         config.scale.vendorIds,
         config.scanner.vendorIds,
       ),
+    );
+  }
+  if (config.hidScanner.enabled) {
+    deviceManager.register(
+      new HidScannerDriver(bus, log, {
+        vendorIds: config.hidScanner.vendorIds,
+        usagePages: config.hidScanner.usagePages,
+        reportHeaderBytes: config.hidScanner.reportHeaderBytes,
+        pollIntervalMs: config.serial.pollIntervalMs,
+      }),
     );
   }
 

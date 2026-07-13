@@ -58,8 +58,8 @@ pnpm install     # 安裝相依
 > 的 `allowBuilds` 核准 `esbuild`（tsx/vitest 需要）與 `@serialport/bindings-cpp`（serialport 原生繫結），
 > 故 `pnpm install` 可直接成功，不會出現 `ERR_PNPM_IGNORED_BUILDS`。
 
-`serialport` 與 `@nut-tree-fork/nut-js` 是**選用原生相依**（optionalDependencies）：
-在無法編譯原生模組的環境仍能安裝成功並啟動（只是少了實體序列裝置／鍵盤退路）。
+`serialport`、`@nut-tree-fork/nut-js`、`node-hid` 是**選用原生相依**（optionalDependencies）：
+在無法編譯原生模組的環境仍能安裝成功並啟動（只是少了對應功能——實體序列裝置／鍵盤退路／HID 掃碼槍）。
 
 ---
 
@@ -208,21 +208,42 @@ ws.onmessage = (ev) => {
 
 ---
 
-## 掃碼槍：切換為 CDC 模式
+## 掃碼槍：三種模式與如何被 agent 讀到
 
-本代理以**序列（CDC / 虛擬 COM 埠）**讀掃碼槍，需先把 掃碼槍 由預設 HID 切到 CDC：
+掃碼槍（Zebra/Symbol，VID `05e0`）可設定不同 USB 主機模式，決定 agent 用哪條路讀它:
 
-1. 用 掃碼槍 手冊的設定條碼，依序掃描：
-   - **Enter / Exit Programming**（進入設定）
-   - **USB CDC Host**（或 `Set USB Device Type → CDC COM Port Emulation`）
-2. Windows 會新增一個 COM 埠（裝置管理員可見，VID `05E0`）。
-3. 建議把終止符設為 **CR 或 CRLF**（代理以 CR/LF 切一條條碼）。
+| 掃碼槍模式 | agent 讀取方式 | 能否經 WS / 交警模式 |
+|---|---|---|
+| **HID-POS / IBM Hand-Held**（usage page `0x8c`） | `HidScannerDriver`（node-hid） | ✅ 可以 |
+| **CDC（虛擬 COM）** | `ScannerDriver`（serialport） | ✅ 可以 |
+| **HID 鍵盤（keyboard wedge，出廠預設，usage page `0x1`）** | ❌ 讀不到（OS 保護鍵盤） | ❌ 只會像鍵盤直接打字，不經 agent |
 
-代理依 `scanner.vendorIds`（預設 `["05e0"]`）自動認埠；亦可在 `config.json` 用 `scanner.path` 強制指定 COM 埠（如 `"COM5"`）。
+> 兩個掃碼槍驅動（HID-POS 與 CDC）**可同時啟用、互不衝突**——掃碼槍一次只在一種模式，只會被對應的驅動接管。
 
-> **與純 HID 模式的關係**：掃碼槍切到 CDC 後一律經本代理。代理再依焦點認領決定走 WS 或鍵盤模擬——
-> 即使在 Excel/UPS/FedEx/Teams，代理也會用 nut.js 把條碼打進該 app（等效一個「智慧版鍵盤楔子」，又能在 WMS 前景時改走 WS）。
-> 若不想經代理、只要掃碼槍永遠當鍵盤打字，則維持掃碼槍**純 HID 模式**（不經本代理、也就沒有 WS 整合）。兩者擇一。
+### A. HID-POS 模式（走 node-hid，免虛擬 COM）
+
+1. 用掃碼槍手冊掃 **`USB IBM Hand-Held`**（或 `HID-POS` / `IBM Table-Top`）設定條碼。
+2. 切好後，`usagePage` 會變成 `0x8c`（可用內建列舉確認，見下）。
+3. agent 依 `hidScanner.vendorIds`（預設 `["05e0"]`）+ `hidScanner.usagePages`（預設 `["0x8c"]`）自動接管，emit `scan`。
+4. **校準 `reportHeaderBytes`**：不同機型／node-hid 對 reportId 的處理可能不同。用 `LOG_LEVEL=debug` 執行，掃一次會印出原始 report:
+   ```
+   [scanner-hid-1] report len=.. hex=[.. .. ..] ascii="....4710088123456"
+   ```
+   數一下條碼字元前有幾個位元組，把 `hidScanner.reportHeaderBytes` 設成那個數字（預設 4）。
+
+### B. CDC 模式（走 serialport / 虛擬 COM）
+
+1. 掃 **`USB CDC Host`**（或 `Set USB Device Type → CDC COM Port Emulation`）。
+2. 系統新增一個 COM 埠（Windows 裝置管理員可見，VID `05E0`）。
+3. 終止符建議設 **CR 或 CRLF**（agent 以 CR/LF 切一條條碼）。
+4. agent 依 `scanner.vendorIds`（預設 `["05e0"]`）自動認埠；或 `scanner.path` 強制指定（如 `"COM5"`）。
+
+### 確認目前掃碼槍在哪種模式
+
+啟動 agent（`LOG_LEVEL=debug`）看 `HidScannerDriver` 是否連上；或用 node-hid 列舉看 `usagePage`：
+`0x8c` = HID-POS（可讀）、`0x1` = 鍵盤模式（讀不到，要改模式）。
+
+> **與純鍵盤模式的關係**：只要切到 HID-POS 或 CDC，掃碼槍就經 agent，由焦點認領決定走 WS 或鍵盤模擬（即使在 Excel/UPS/FedEx/Teams 也能用 nut.js 打進去）。若維持出廠的**鍵盤模式**，它就是一支普通鍵盤、不經 agent、也沒有 WS 整合。
 
 ---
 
@@ -253,10 +274,12 @@ src/
   logger.ts                極簡分級 logger
   TrafficCop.ts            交警模式仲裁（WS 廣播 vs 鍵盤退路）
   core/                    types / DeviceBus（型別安全事件匯流排）/ DeviceManager（狀態快照與生命週期）
-  parsing/                 LineFramer（分行）/ scaleProtocol（秤協定，純函式）
+  parsing/                 LineFramer（分行）/ scaleProtocol（秤協定）/ hidPosReport（HID-POS report 解析，皆純函式）
   devices/
     serial/                serialLoader（懶載入 serialport）/ SerialDeviceDriver（輪詢/熱插拔底座）
-    ScannerDriver.ts       Zebra CDC 掃碼槍
+    hid/hidLoader.ts       懶載入 node-hid
+    ScannerDriver.ts       Zebra CDC 掃碼槍（serialport）
+    HidScannerDriver.ts    HID-POS 掃碼槍（node-hid，usage page 0x8c）
     ScaleDriver.ts         電子秤（資料指紋辨識）
   keyboard/KeyboardEmulator.ts   nut.js 鍵盤模擬（平台保護、序列化排隊）
   server/
