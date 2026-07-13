@@ -155,7 +155,6 @@ export function loadConfig(): AppConfig {
     const issues = result.error.issues.map((i) => `  - ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n");
     throw new Error(`設定驗證失敗：\n${issues}`);
   }
-  // logLevel 用環境變數覆寫時，若值非法，zod 會擋下；這裡回傳已驗證結果。
   return result.data;
 }
 

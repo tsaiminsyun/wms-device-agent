@@ -3,6 +3,9 @@
 // 故兩種驅動共用此 framer。未遇終止符的殘段留在 buffer，下次再續接。
 
 export class LineFramer {
+  /** 被丟棄的暴長片段累計次數（供上層判斷是否要 log 告警）。 */
+  overflowCount = 0;
+
   private buffer = "";
 
   constructor(private readonly maxBuffer = 512) {}
@@ -25,9 +28,6 @@ export class LineFramer {
     }
     return parts;
   }
-
-  /** 被丟棄的暴長片段累計次數（供上層判斷是否要 log 告警）。 */
-  overflowCount = 0;
 
   /** 清空殘餘 buffer（關閉埠時呼叫）。 */
   reset(): void {

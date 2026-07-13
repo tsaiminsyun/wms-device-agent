@@ -38,13 +38,13 @@ describe("parseClientMessage", () => {
   it("合法 ping", () => {
     const r = parseClientMessage(JSON.stringify({ type: "ping", t: 5 }));
     expect(r.ok).toBe(true);
-    expect(r.message?.type).toBe("ping");
+    if (r.ok) expect(r.message.type).toBe("ping");
   });
 
   it("subscribe 未給 topics 時預設全收", () => {
     const r = parseClientMessage(JSON.stringify({ type: "subscribe" }));
     expect(r.ok).toBe(true);
-    if (r.message?.type === "subscribe") {
+    if (r.ok && r.message.type === "subscribe") {
       expect(r.message.topics).toEqual([...ALL_TOPICS]);
     } else {
       throw new Error("應為 subscribe");
@@ -66,7 +66,7 @@ describe("parseClientMessage", () => {
   it("focus 認領訊息（active:boolean）", () => {
     const r = parseClientMessage(JSON.stringify({ type: "focus", active: true }));
     expect(r.ok).toBe(true);
-    if (r.message?.type === "focus") expect(r.message.active).toBe(true);
+    if (r.ok && r.message.type === "focus") expect(r.message.active).toBe(true);
     else throw new Error("應為 focus");
   });
 

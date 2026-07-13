@@ -67,10 +67,9 @@ export class KeyboardEmulator {
     this.log.warn(msg);
   }
 
-  /** 把條碼打到目前焦點輸入框（序列化排隊）。回傳是否實際送出。 */
+  /** 把條碼排入佇列，依序打到目前焦點輸入框（確保多筆掃碼不交錯）。 */
   typeBarcode(text: string): void {
     if (!this.opts.enabled) return;
-    // 串接到佇列，確保逐筆依序打字、不交錯。
     this.queue = this.queue.then(() => this.doType(text)).catch((err) => {
       this.log.warn("鍵盤模擬送出失敗：", err);
     });

@@ -7,6 +7,7 @@
 // 只讀不寫，降低對其他序列裝置的干擾。
 
 import { LineFramer } from "../../parsing/LineFramer.js";
+import { OPEN_RETRY_COOLDOWN_MS, PollLoop, RetryCooldown } from "../hotplug.js";
 import type { DeviceBus } from "../../core/DeviceBus.js";
 import type { DeviceDriver } from "../../core/DeviceManager.js";
 import type { DeviceKind, DeviceStatus } from "../../core/types.js";
@@ -59,21 +60,16 @@ export interface SerialDriverOptions {
   pollIntervalMs: number;
 }
 
-// 開埠失敗（例：被其他程序鎖住 "Cannot lock port"）後的重試冷卻時間，避免每次輪詢都狂試與洗 log。
-const OPEN_RETRY_COOLDOWN_MS = 5_000;
-
 export abstract class SerialDeviceDriver implements DeviceDriver {
   abstract readonly name: string;
   protected abstract readonly kind: DeviceKind;
   protected abstract readonly displayName: string;
 
   private readonly open = new Map<string, OpenEntry>(); // path → entry
-  // 開埠失敗後的「下次可重試時間」（path → epoch ms）；冷卻期間輪詢會略過該埠。
-  private readonly retryAfter = new Map<string, number>();
-  private timer: NodeJS.Timeout | null = null;
+  private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS);
+  private loop: PollLoop | null = null;
   private SerialPort: SerialPortCtor | null = null;
   private counter = 0;
-  private polling = false;
 
   protected readonly log: Logger;
 
@@ -104,16 +100,13 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       this.log.warn(`${this.displayName} 驅動未啟用（serialport 不可用）。`);
       return;
     }
-    await this.poll();
-    this.timer = setInterval(() => void this.poll(), this.options.pollIntervalMs);
-    if (typeof this.timer.unref === "function") this.timer.unref();
+    this.loop = new PollLoop(this.options.pollIntervalMs, () => this.poll());
+    await this.loop.start();
   }
 
   async stop(): Promise<void> {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.loop?.stop();
+    this.loop = null;
     const paths = [...this.open.keys()];
     await Promise.allSettled(
       paths.map(
@@ -132,12 +125,11 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     );
     for (const path of paths) this.registry.release(path);
     this.open.clear();
-    this.retryAfter.clear();
+    this.retry.reset();
   }
 
   private async poll(): Promise<void> {
-    if (!this.SerialPort || this.polling) return;
-    this.polling = true;
+    if (!this.SerialPort) return;
     try {
       const ports = await this.SerialPort.list();
       const seen = new Set(ports.map((p) => p.path));
@@ -146,25 +138,19 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       for (const [path, entry] of this.open) {
         if (!seen.has(path)) this.detach(path, entry, "拔除");
       }
-      // 已消失的埠清掉其重試冷卻，之後重插即可立刻嘗試。
-      for (const path of this.retryAfter.keys()) {
-        if (!seen.has(path)) this.retryAfter.delete(path);
-      }
+      this.retry.prune(seen);
 
       // 偵測新增：符合條件、尚未開啟、未被其他驅動占用、且不在重試冷卻中。
-      const now = Date.now();
       for (const info of ports) {
         if (this.open.has(info.path)) continue;
         if (this.registry.isClaimed(info.path)) continue;
-        if ((this.retryAfter.get(info.path) ?? 0) > now) continue;
+        if (this.retry.isCoolingDown(info.path)) continue;
         const vid = normalizeHexId(info.vendorId);
         const matched = this.options.forcedPath ? info.path === this.options.forcedPath : this.selectPort(info, vid);
         if (matched) this.attach(info);
       }
     } catch (err) {
       this.log.warn("列舉序列埠失敗：", err);
-    } finally {
-      this.polling = false;
     }
   }
 
@@ -193,7 +179,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     } catch (err) {
       this.log.error(`開啟 ${info.path} 失敗：`, err);
       this.registry.release(info.path);
-      this.retryAfter.set(info.path, Date.now() + OPEN_RETRY_COOLDOWN_MS);
+      this.retry.schedule(info.path);
       handle.pushStatus("error", `開啟失敗：${(err as Error).message}`);
       return;
     }
@@ -202,7 +188,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.open.set(info.path, entry);
 
     port.on("open", () => {
-      this.retryAfter.delete(info.path); // 開成功 → 清掉冷卻
+      this.retry.clear(info.path);
       this.onOpen(handle);
     });
     port.on("data", (chunk: Buffer) => {
@@ -214,9 +200,9 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       // 此時埠未真正開啟 → 釋放並設冷卻，讓之後輪詢重試（佔用方放開後即自動恢復），不卡在 error。
       if (!entry.port.isOpen) {
         this.log.warn(
-          `[${uid}] 開啟 ${info.path} 失敗：${err.message}（${OPEN_RETRY_COOLDOWN_MS / 1000}s 後重試；常見原因：埠被其他程序佔用）`,
+          `[${uid}] 開啟 ${info.path} 失敗：${err.message}（${this.retry.cooldownMs / 1000}s 後重試；常見原因：埠被其他程序佔用）`,
         );
-        this.retryAfter.set(info.path, Date.now() + OPEN_RETRY_COOLDOWN_MS);
+        this.retry.schedule(info.path);
         this.detach(info.path, entry, "開啟失敗");
         return;
       }

@@ -46,7 +46,7 @@ export async function loadNodeHid(warn: (msg: string, err?: unknown) => void): P
   return cached;
 }
 
-// node-hid 的 vendorId 是數字 → 正規化成小寫 4 碼 hex 字串，方便與設定比對。
-export function vendorHex(vid: number): string {
-  return (vid >>> 0).toString(16).padStart(4, "0");
+// node-hid 的 vendorId / productId 是數字 → 正規化成小寫 4 碼 hex 字串，方便與設定比對及顯示。
+export function hex4(id: number): string {
+  return (id >>> 0).toString(16).padStart(4, "0");
 }

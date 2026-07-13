@@ -16,14 +16,9 @@ export function setLogLevel(level: LogLevel): void {
   threshold = LEVEL_ORDER[level] ?? LEVEL_ORDER.info;
 }
 
-function ts(): string {
-  // 不用 Date.now() 以外的 wall-clock 格式化即可；ISO 字串足夠人類閱讀。
-  return new Date().toISOString();
-}
-
 function emit(level: LogLevel, scope: string, args: unknown[]): void {
   if (LEVEL_ORDER[level] < threshold) return;
-  const prefix = `${ts()} ${level.toUpperCase().padEnd(5)} [${scope}]`;
+  const prefix = `${new Date().toISOString()} ${level.toUpperCase().padEnd(5)} [${scope}]`;
   const sink = level === "error" ? console.error : level === "warn" ? console.warn : console.log;
   sink(prefix, ...args);
 }

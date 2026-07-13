@@ -10,13 +10,12 @@
 // 每筆原始 report 以 hex/ascii 印在 debug log，接新機型時據此校準 reportHeaderBytes。
 
 import { parseHidPosReport } from "../parsing/hidPosReport.js";
-import { loadNodeHid, vendorHex, type HidDeviceInfo, type HidDeviceInstance, type HidModule } from "./hid/hidLoader.js";
+import { PollLoop, RetryCooldown, OPEN_RETRY_COOLDOWN_MS } from "./hotplug.js";
+import { loadNodeHid, hex4, type HidDeviceInfo, type HidDeviceInstance, type HidModule } from "./hid/hidLoader.js";
 import type { DeviceBus } from "../core/DeviceBus.js";
 import type { DeviceDriver } from "../core/DeviceManager.js";
 import type { DeviceStatus } from "../core/types.js";
 import type { Logger } from "../logger.js";
-
-const OPEN_RETRY_COOLDOWN_MS = 5_000;
 
 export interface HidScannerOptions {
   vendorIds: readonly string[];
@@ -30,8 +29,6 @@ export interface HidScannerOptions {
 interface OpenEntry {
   uid: string;
   device: HidDeviceInstance;
-  productName: string;
-  closing: boolean;
 }
 
 export class HidScannerDriver implements DeviceDriver {
@@ -40,12 +37,11 @@ export class HidScannerDriver implements DeviceDriver {
   private readonly displayName = "掃碼槍(HID)";
 
   private readonly open = new Map<string, OpenEntry>(); // path → entry
-  private readonly retryAfter = new Map<string, number>(); // path → epoch ms
+  private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS);
   private readonly hinted = new Set<string>(); // 已印過「為何略過」提示的 path，避免洗 log
   private HID: HidModule | null = null;
-  private timer: NodeJS.Timeout | null = null;
+  private loop: PollLoop | null = null;
   private counter = 0;
-  private polling = false;
   private readonly log: Logger;
 
   constructor(
@@ -62,25 +58,22 @@ export class HidScannerDriver implements DeviceDriver {
       this.log.warn("HID 掃碼槍驅動未啟用（node-hid 不可用）。");
       return;
     }
-    this.poll();
-    this.timer = setInterval(() => this.poll(), this.opts.pollIntervalMs);
-    if (typeof this.timer.unref === "function") this.timer.unref();
+    this.loop = new PollLoop(this.opts.pollIntervalMs, () => this.poll());
+    await this.loop.start();
   }
 
   async stop(): Promise<void> {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-    for (const [path, entry] of this.open) this.closeEntry(path, entry, "關閉");
+    this.loop?.stop();
+    this.loop = null;
+    for (const entry of this.open.values()) this.closeEntry(entry, "關閉");
     this.open.clear();
-    this.retryAfter.clear();
+    this.retry.reset();
     this.hinted.clear();
   }
 
   // 判斷某個 HID collection 該不該開。ours=是否本廠牌（用於是否印提示）；skipReason=本廠牌但不開的原因。
   private evaluate(info: HidDeviceInfo): { open: boolean; ours: boolean; skipReason?: string } {
-    if (!this.opts.vendorIds.includes(vendorHex(info.vendorId))) return { open: false, ours: false };
+    if (!this.opts.vendorIds.includes(hex4(info.vendorId))) return { open: false, ours: false };
 
     // 鍵盤(0x1/0x6)、滑鼠(0x1/0x2)：OS 保護、node 讀不到（且送的是 scancode 非 HID-POS），一律排除。
     if (info.usagePage === 0x01 && (info.usage === 0x06 || info.usage === 0x02)) {
@@ -103,8 +96,7 @@ export class HidScannerDriver implements DeviceDriver {
   }
 
   private poll(): void {
-    if (!this.HID || this.polling) return;
-    this.polling = true;
+    if (!this.HID) return;
     try {
       const list = this.HID.devices().filter((d) => typeof d.path === "string" && d.path.length > 0);
       const seen = new Set(list.map((d) => d.path as string));
@@ -113,41 +105,34 @@ export class HidScannerDriver implements DeviceDriver {
       for (const [path, entry] of this.open) {
         if (!seen.has(path)) this.detach(path, entry, "拔除");
       }
-      for (const path of this.retryAfter.keys()) {
-        if (!seen.has(path)) this.retryAfter.delete(path);
-      }
+      this.retry.prune(seen);
       for (const path of this.hinted) {
         if (!seen.has(path)) this.hinted.delete(path);
       }
 
       // 新增：符合條件、尚未開啟、不在冷卻中。
-      const now = Date.now();
       for (const info of list) {
         const path = info.path as string;
         if (this.open.has(path)) continue;
         const { open, ours, skipReason } = this.evaluate(info);
         if (open) {
-          if ((this.retryAfter.get(path) ?? 0) > now) continue;
+          if (this.retry.isCoolingDown(path)) continue;
           this.attach(path, info);
         } else if (ours && skipReason && !this.hinted.has(path)) {
           // 偵測到本廠牌掃碼槍但不能讀 → 印一次原因與解法，方便從 log 直接看懂。
           this.hinted.add(path);
-          const vid = vendorHex(info.vendorId);
-          const pid = (info.productId >>> 0).toString(16).padStart(4, "0");
-          this.log.warn(`偵測到掃碼槍 ${vid}:${pid}（${info.product || "?"}）但未接管：${skipReason}`);
+          this.log.warn(`偵測到掃碼槍 ${hex4(info.vendorId)}:${hex4(info.productId)}（${info.product || "?"}）但未接管：${skipReason}`);
         }
       }
     } catch (err) {
       this.log.warn("列舉 HID 裝置失敗：", err);
-    } finally {
-      this.polling = false;
     }
   }
 
   private attach(path: string, info: HidDeviceInfo): void {
     if (!this.HID) return;
     const uid = `scanner-hid-${++this.counter}`;
-    const productName = info.product || `型號 0x${(info.productId >>> 0).toString(16).padStart(4, "0")}`;
+    const productName = info.product || `型號 0x${hex4(info.productId)}`;
     this.pushStatus(uid, "connecting", `連線中… ${productName}`);
 
     let device: HidDeviceInstance;
@@ -155,29 +140,28 @@ export class HidScannerDriver implements DeviceDriver {
       device = new this.HID.HID(path);
     } catch (err) {
       this.log.warn(
-        `開啟 HID 掃碼槍失敗：${(err as Error).message}（${OPEN_RETRY_COOLDOWN_MS / 1000}s 後重試；純鍵盤模式無法開啟，請設 HID-POS 模式）`,
+        `開啟 HID 掃碼槍失敗：${(err as Error).message}（${this.retry.cooldownMs / 1000}s 後重試；純鍵盤模式無法開啟，請設 HID-POS 模式）`,
       );
-      this.retryAfter.set(path, Date.now() + OPEN_RETRY_COOLDOWN_MS);
+      this.retry.schedule(path);
       this.pushStatus(uid, "error", `開啟失敗：${(err as Error).message}`);
       return;
     }
 
-    const entry: OpenEntry = { uid, device, productName, closing: false };
+    const entry: OpenEntry = { uid, device };
     this.open.set(path, entry);
-    this.retryAfter.delete(path);
+    this.retry.clear(path);
 
-    const vid = vendorHex(info.vendorId);
-    const pid = (info.productId >>> 0).toString(16).padStart(4, "0");
+    const idText = `${hex4(info.vendorId)}:${hex4(info.productId)}`;
     const up = typeof info.usagePage === "number" ? `0x${info.usagePage.toString(16)}` : "?";
-    this.pushStatus(uid, "connected", `${productName} (${vid}:${pid}) usagePage=${up}`);
-    this.log.info(`[${uid}] 已連線 HID 掃碼槍｜${productName}｜${vid}:${pid}｜usagePage=${up}`);
+    this.pushStatus(uid, "connected", `${productName} (${idText}) usagePage=${up}`);
+    this.log.info(`[${uid}] 已連線 HID 掃碼槍｜${productName}｜${idText}｜usagePage=${up}`);
 
     device.on("data", (data: Buffer) => this.onReport(entry, data));
     device.on("error", (err: Error) => {
       this.log.warn(`[${uid}] HID 錯誤：${err.message}`);
       this.detach(path, entry, `錯誤：${err.message}`);
       // 讓輪詢稍後重試（例如暫時性錯誤）。
-      this.retryAfter.set(path, Date.now() + OPEN_RETRY_COOLDOWN_MS);
+      this.retry.schedule(path);
     });
   }
 
@@ -202,12 +186,11 @@ export class HidScannerDriver implements DeviceDriver {
   private detach(path: string, entry: OpenEntry, reason: string): void {
     if (!this.open.has(path)) return;
     this.open.delete(path);
-    this.closeEntry(path, entry, reason);
+    this.closeEntry(entry, reason);
     this.pushStatus(entry.uid, "removed", "");
   }
 
-  private closeEntry(_path: string, entry: OpenEntry, reason: string): void {
-    entry.closing = true;
+  private closeEntry(entry: OpenEntry, reason: string): void {
     try {
       entry.device.removeAllListeners("data");
       entry.device.removeAllListeners("error");

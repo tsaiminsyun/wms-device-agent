@@ -1,8 +1,8 @@
-// HID-POS / IBM Hand-held 掃碼槍的 input report 解析（純函式，自 references/webhid-device.js 移植）。
+// HID-POS / IBM Hand-held 掃碼槍的 input report 解析（純函式，便於單元測試）。
 // Zebra 等掃碼槍在 HID-POS 模式下，每筆 input report 以固定表頭起頭，其後為條碼的可列印字元，
 // 以 CR/LF 分隔、NUL 表示結束；IBM 模式常為「一筆 report＝一整條 barcode、無 CR/LF」。
 //
-// 解析規則（與參考碼一致）：
+// 解析規則：
 //   - 跳過表頭 headerBytes（預設 4）；
 //   - 0x20~0x7e 可列印字元累進緩衝；
 //   - 遇 CR(0x0d)/LF(0x0a) 視為一條完結 → flush；

@@ -149,8 +149,8 @@ export class WsServer {
 
   private onMessage(ws: WebSocket, raw: string): void {
     const result = parseClientMessage(raw);
-    if (!result.ok || !result.message) {
-      this.sendTo(ws, build.error("bad-message", result.error ?? "無法解析訊息"));
+    if (!result.ok) {
+      this.sendTo(ws, build.error("bad-message", result.error));
       return;
     }
     const msg = result.message;
@@ -179,28 +179,13 @@ export class WsServer {
 
   /** 啟動：訂閱 DeviceBus 的 weight/device-status（scan 由 TrafficCop 經 broadcastScan 路由），開始心跳。 */
   start(): void {
-    this.busListeners.weight = (e) =>
-      this.broadcast(
-        "weight",
-        build.weight({ deviceId: e.deviceId, deviceName: e.deviceName, kg: e.kg, stable: e.stable, ts: e.ts }),
-      );
-    this.busListeners["device-status"] = (e) =>
-      this.broadcast(
-        "device-status",
-        build.deviceStatus({
-          deviceId: e.deviceId,
-          deviceName: e.deviceName,
-          kind: e.kind,
-          status: e.status,
-          detail: e.detail,
-          ts: e.ts,
-        }),
-      );
+    this.busListeners.weight = (e) => this.broadcast("weight", build.weight(e));
+    this.busListeners["device-status"] = (e) => this.broadcast("device-status", build.deviceStatus(e));
     this.bus.on("weight", this.busListeners.weight);
     this.bus.on("device-status", this.busListeners["device-status"]);
 
     this.heartbeat = setInterval(() => this.runHeartbeat(), HEARTBEAT_INTERVAL_MS);
-    if (typeof this.heartbeat.unref === "function") this.heartbeat.unref();
+    this.heartbeat.unref?.();
   }
 
   private runHeartbeat(): void {
@@ -226,13 +211,14 @@ export class WsServer {
 
   // ---- 焦點認領查詢與 scan 路由（給 TrafficCop / HTTP 用）----
 
-  /** 目前是否有任一用戶端持有「有效（未逾時）」的焦點認領。 */
+  /** 該用戶端是否持有「有效（未逾時）」的焦點認領。 */
+  private isValidClaim(ws: WebSocket, s: ClientState, now: number): boolean {
+    return ws.readyState === WebSocket.OPEN && s.focusActive && now < s.focusExpiresAt;
+  }
+
+  /** 目前是否有任一用戶端持有有效的焦點認領。 */
   hasActiveClaim(): boolean {
-    const now = Date.now();
-    for (const [ws, s] of this.clients) {
-      if (ws.readyState === WebSocket.OPEN && s.focusActive && now < s.focusExpiresAt) return true;
-    }
-    return false;
+    return this.claimingCount() > 0;
   }
 
   /** 目前持有有效認領的用戶端數（給 /devices 顯示）。 */
@@ -240,7 +226,7 @@ export class WsServer {
     const now = Date.now();
     let n = 0;
     for (const [ws, s] of this.clients) {
-      if (ws.readyState === WebSocket.OPEN && s.focusActive && now < s.focusExpiresAt) n++;
+      if (this.isValidClaim(ws, s, now)) n++;
     }
     return n;
   }
@@ -248,14 +234,10 @@ export class WsServer {
   /** 把一筆掃碼送給「持有有效認領、且訂閱 scan」的用戶端。回傳實際送達數。 */
   broadcastScan(e: ScanEvent): number {
     const now = Date.now();
-    const payload = serialize(
-      build.scan({ deviceId: e.deviceId, deviceName: e.deviceName, barcode: e.barcode, ts: e.ts }),
-    );
+    const payload = serialize(build.scan(e));
     let sent = 0;
     for (const [ws, s] of this.clients) {
-      if (ws.readyState !== WebSocket.OPEN) continue;
-      if (!s.topics.has("scan")) continue;
-      if (!(s.focusActive && now < s.focusExpiresAt)) continue;
+      if (!this.isValidClaim(ws, s, now) || !s.topics.has("scan")) continue;
       if (this.rawSend(ws, payload, s.id)) sent++;
     }
     return sent;

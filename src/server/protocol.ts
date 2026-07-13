@@ -152,11 +152,7 @@ const FocusSchema = z.object({
 export const ClientMessageSchema = z.discriminatedUnion("type", [PingSchema, SubscribeSchema, FocusSchema]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
-export interface ParseResult {
-  ok: boolean;
-  message?: ClientMessage;
-  error?: string;
-}
+export type ParseResult = { ok: true; message: ClientMessage } | { ok: false; error: string };
 
 export function parseClientMessage(raw: string): ParseResult {
   let json: unknown;

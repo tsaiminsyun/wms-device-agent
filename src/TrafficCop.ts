@@ -9,6 +9,7 @@
 // 因此由頁面主動認領；切走其他 app 時頁面失焦釋放，掃碼自動退回鍵盤，達成「掃碼槍到處都能用」。
 //
 // 互斥保證：scan 不再由 WsServer 自動廣播；只有這裡擇一決定走 WS 或走鍵盤，不會雙觸發。
+// 電子秤 weight 與認領無關：一律由 WsServer 廣播給所有訂閱者，不經此處、也無鍵盤退路。
 
 import type { DeviceBus } from "./core/DeviceBus.js";
 import type { ScanEvent } from "./core/types.js";
@@ -52,8 +53,6 @@ export class TrafficCop {
     }
     this.log.info(`無有效認領 → 走鍵盤模擬退路：${e.barcode}`);
     this.keyboard.typeBarcode(e.barcode);
-
-    // 電子秤 weight 不做鍵盤退路；weight 一律由 WsServer 廣播給所有訂閱者，與認領無關。
   }
 
   stop(): void {
