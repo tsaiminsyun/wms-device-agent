@@ -6,6 +6,7 @@
 //
 // 注意：序列化送出——同時間多筆掃碼要排隊逐一打字，避免字元交錯。
 
+import { nativeRequire } from "../runtime/nativeRequire.js";
 import type { Logger } from "../logger.js";
 
 // nut.js fork 的最小介面（避免 typecheck 綁定該選用相依是否安裝）。
@@ -44,7 +45,7 @@ export class KeyboardEmulator {
       return null;
     }
     try {
-      const m = (await import("@nut-tree-fork/nut-js")) as unknown as NutModule;
+      const m = nativeRequire("@nut-tree-fork/nut-js") as NutModule;
       // 載入時驗證關鍵 API 形狀，避免 fork 版本變動造成靜默按錯鍵。
       if (!m?.keyboard || typeof m.keyboard.type !== "function" || typeof m.Key?.Enter !== "number") {
         throw new Error("nut.js 介面不符預期（keyboard.type / Key.Enter 缺失）");

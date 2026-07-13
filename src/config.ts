@@ -2,8 +2,9 @@
 // 以 zod 驗證最終結果，確保型別與範圍正確；驗證失敗直接拋錯（fail fast）。
 
 import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
+import { isSeaBuild } from "./runtime/nativeRequire.js";
 import type { LogLevel } from "./logger.js";
 
 const LogLevelSchema = z.enum(["debug", "info", "warn", "error"]);
@@ -88,16 +89,22 @@ export const ConfigSchema = z.object({
 export type AppConfig = z.infer<typeof ConfigSchema>;
 
 function readConfigFile(): unknown {
-  const path = resolve(process.cwd(), "config.json");
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch (err) {
-    // 找不到檔案是正常情形（用預設）；只有 JSON 壞掉才警告。
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.warn(`[config] 讀取 ${path} 失敗，改用預設值：`, (err as Error).message);
+  // 依序找：工作目錄 → （打包成 exe 時）exe 所在目錄；後者讓雙擊/排程啟動不受工作目錄影響。
+  const candidates = [resolve(process.cwd(), "config.json")];
+  if (isSeaBuild()) candidates.push(join(dirname(process.execPath), "config.json"));
+
+  for (const path of candidates) {
+    try {
+      return JSON.parse(readFileSync(path, "utf8"));
+    } catch (err) {
+      // 找不到檔案是正常情形（試下一個候選／用預設）；只有 JSON 壞掉才警告。
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.warn(`[config] 讀取 ${path} 失敗，改用預設值：`, (err as Error).message);
+        return {};
+      }
     }
-    return {};
   }
+  return {};
 }
 
 // 把環境變數覆寫進 partial config（只覆寫有設定的鍵）。

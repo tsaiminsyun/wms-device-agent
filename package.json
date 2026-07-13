@@ -14,20 +14,23 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "package:win": "bash packaging/windows/build-win.sh"
   },
   "dependencies": {
     "ws": "^8.18.0",
     "zod": "^3.23.8"
   },
   "optionalDependencies": {
-    "serialport": "^12.0.0",
     "@nut-tree-fork/nut-js": "^4.2.0",
-    "node-hid": "^3.1.0"
+    "node-hid": "^3.1.0",
+    "serialport": "^12.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
     "@types/ws": "^8.5.12",
+    "esbuild": "^0.28.1",
+    "postject": "1.0.0-alpha.6",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"

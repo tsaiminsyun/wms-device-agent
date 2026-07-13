@@ -1,7 +1,10 @@
 // node-hid 是「選用原生相依」(optionalDependencies)：載入失敗（未安裝／編譯失敗／平台不支援）時
-// 回 null 並告警一次，讓 HID 掃碼槍功能停用但不影響代理其餘部分。一律動態 import 懶載入。
+// 回 null 並告警一次，讓 HID 掃碼槍功能停用但不影響代理其餘部分。
+// 一律懶載入（nativeRequire，支援 SEA 打包）。
 //
 // 為了讓 typecheck 不被「node-hid 是否已安裝」綁住，這裡只宣告本專案用到的最小介面。
+
+import { nativeRequire } from "../../runtime/nativeRequire.js";
 
 export interface HidDeviceInfo {
   vendorId: number;
@@ -32,8 +35,7 @@ let cached: HidModule | null | undefined;
 export async function loadNodeHid(warn: (msg: string, err?: unknown) => void): Promise<HidModule | null> {
   if (cached !== undefined) return cached;
   try {
-    const mod = (await import("node-hid")) as unknown as HidModule & { default?: HidModule };
-    // ESM/CJS interop：node-hid 為 CJS，具名或 default 皆可能。
+    const mod = nativeRequire("node-hid") as HidModule & { default?: HidModule };
     const resolved = (mod.default ?? mod) as HidModule;
     if (typeof resolved.devices !== "function" || typeof resolved.HID !== "function") {
       throw new Error("node-hid 介面不符預期（缺 devices() 或 HID）");

@@ -1,0 +1,11 @@
+{
+  "name": "wms-device-agent-native-deps",
+  "version": "0.0.0",
+  "private": true,
+  "description": "隨 exe 出貨的 Windows 版原生相依（node_modules）。由 build-win.sh 以 npm --os=win32 --cpu=x64 安裝後複製到 dist-win/。版本需與根目錄 package.json 的 optionalDependencies 保持一致。",
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "4.2.6",
+    "node-hid": "3.3.0",
+    "serialport": "12.0.0"
+  }
+}

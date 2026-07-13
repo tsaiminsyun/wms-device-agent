@@ -15,7 +15,11 @@ import { WsServer } from "./server/WsServer.js";
 import { createApiServer } from "./server/httpApi.js";
 import { PROTOCOL_VERSION, type AgentInfo } from "./server/protocol.js";
 
+// 打包（SEA）時由 esbuild --define 注入；exe 旁沒有 package.json 可讀。
+declare const __PKG_META__: { name: string; version: string } | undefined;
+
 function readPackageMeta(): { name: string; version: string } {
+  if (typeof __PKG_META__ !== "undefined") return __PKG_META__;
   try {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
       name?: string;

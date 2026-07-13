@@ -6,3 +6,11 @@ dist/
 .DS_Store
 coverage/
 *.tsbuildinfo
+
+# 打包產物（pnpm package:win）
+build/
+dist-win/
+packaging/.cache/
+packaging/windows/native-deps/node_modules/
+packaging/windows/native-deps/package-lock.json
+*-win-x64.zip

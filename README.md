@@ -107,6 +107,7 @@ pnpm install     # 安裝相依
 | `pnpm test` | 單元測試（vitest，一次跑完） |
 | `pnpm test:watch` | 單元測試（watch 模式） |
 | `pnpm typecheck` | 型別檢查（`tsc --noEmit`） |
+| `pnpm package:win` | 打包 Windows 單機版 exe（免裝 Node，見「部署到 Windows」） |
 
 啟動後預設端點：
 
@@ -361,12 +362,17 @@ src/
     ScaleDriver.ts         電子秤（繼承 SerialDeviceDriver，資料指紋辨識）
   keyboard/
     KeyboardEmulator.ts    nut.js 鍵盤模擬（懶載入、失敗降級、序列化排隊）
+  runtime/
+    nativeRequire.ts       原生相依載入器（開發 / dist / SEA 單機版三種執行情境的解析）
   server/
     protocol.ts            WS 線上協定 v1（訊息 builder + zod 驗證用戶端訊息）
     WsServer.ts            WebSocket 伺服器（Origin 白名單/心跳/訂閱/焦點認領/廣播）
     httpApi.ts             HTTP 狀態 API（/health、/devices、CORS）
     origin.ts              Origin 白名單檢查（WS/HTTP 共用）
 test/                      vitest 單元測試（純函式解析、協定、TrafficCop、config）
+packaging/
+  windows/                 Windows 單機版打包：build-win.sh（SEA 打包腳本）、
+                           native-deps/（隨 exe 出貨的原生相依清單）、自動啟動腳本、README-WINDOWS.md
 ```
 
 **訊號流**：驅動（devices/）解析硬體訊號 → emit 到 `DeviceBus` → `TrafficCop`（scan）與 `WsServer`（weight/device-status）訂閱處理。驅動不認識伺服器、伺服器不碰硬體，中間只隔一個 bus。
@@ -401,13 +407,32 @@ Node 版本升級：改 [mise.toml](mise.toml) 的 `node = "22"` → `mise insta
 
 ### 部署到 Windows（正式環境）
 
+**方式一：單機版 exe（免裝 Node，建議）**
+
 ```bash
-pnpm build             # 編譯到 dist/
-pnpm start             # 或 node dist/index.js
+pnpm package:win       # 產出 dist-win/ 與 wms-device-agent-<版本>-win-x64.zip
 ```
 
-- `config.json` 放在**執行目錄**（工作目錄），設定正式的 `security.allowedOrigins`，建議 `ALLOW_NO_ORIGIN=false`。
-- 以服務常駐可用 [nssm](https://nssm.cc/) 或 node-windows 等包裝器；**停止方式要設定成送 Ctrl+C / SIGINT**，agent 才能優雅關閉（釋放序列埠）。Ctrl+Break（SIGBREAK）也有處理。
+把 zip 解壓到目標機器即可執行，**不需安裝 Node.js**。內含 `wms-device-agent.exe`、Windows 版原生模組（`node_modules/`，必須與 exe 同層）、`config.json`、手動啟動與自動啟動腳本；目標機器上的安裝、自動啟動與排錯見包內的 [README-WINDOWS.md](packaging/windows/README-WINDOWS.md)。
+
+原理：Node SEA（Single Executable Application）——app 程式碼與純 JS 相依（ws/zod）bundle 成單一檔後注入官方 `node.exe`；原生模組（serialport / node-hid / nut.js）無法嵌入 exe，由 exe 旁的 `node_modules` 於執行期載入（見 [src/runtime/nativeRequire.ts](src/runtime/nativeRequire.ts)）。SEA blob 與 Node 版本綁定，打包腳本會自動下載與 mise 釘選版本相同的 Windows `node.exe`（快取於 `packaging/.cache/`）。打包可在 macOS / Linux / CI 上完成，不需 Windows 機器。
+
+**更新（bug 修正後重新部署）**
+
+1. 開發機：修完後建議先 bump [package.json](package.json) 的 `version`（`/health` 與 zip 檔名會帶版本，方便確認更新有生效），再跑 `pnpm package:win` 產新 zip。
+2. 目標機：把新 zip 放到「下載」資料夾，雙擊安裝資料夾裡的 `update-agent.bat`（或把 zip 拖曳到它上面）——自動停止舊版、保留現場的 `config.json`、解壓覆蓋、重啟。
+3. 開 `http://127.0.0.1:8788/health` 確認 `version` 是新版本。
+
+**方式二：目標機器已有 Node**
+
+```bash
+pnpm build && pnpm start   # 或 node dist/index.js
+```
+
+共通注意事項：
+
+- `config.json` 放在**執行目錄**（單機版另會找 exe 所在目錄），設定正式的 `security.allowedOrigins`，建議 `ALLOW_NO_ORIGIN=false`。
+- **自動啟動請用「登入時排程工作」而非 Windows 服務**：鍵盤模擬退路必須在使用者桌面工作階段執行，服務（session 0）打不進使用者視窗。單機版已附 `install-autostart.bat` 一鍵註冊。確定不需鍵盤退路時才考慮 [nssm](https://nssm.cc/) 服務（停止方式需設定成送 Ctrl+C / SIGINT 以優雅關閉；Ctrl+Break/SIGBREAK 也有處理）。
 - 同一台機器**只能跑一個 agent 實例**：第二個實例會搶不到埠（HTTP 8788）與序列埠（`Cannot lock port`）。
 
 ### 改動前的驗證清單

@@ -1,8 +1,11 @@
 // serialport 是「選用原生相依」(optionalDependencies)：在無法編譯原生模組的環境（或刻意不裝）時
-// 仍能啟動代理（只是實體序列裝置停用）。因此一律以動態 import 懶載入，載入失敗就回 null 並告警一次。
+// 仍能啟動代理（只是實體序列裝置停用）。因此一律懶載入（nativeRequire，支援 SEA 打包），
+// 載入失敗就回 null 並告警一次。
 //
 // 為了讓 typecheck 不被「serialport 是否已安裝」綁住，這裡只宣告本專案實際用到的最小介面，
 // 不直接引用 serialport 自身的型別定義。
+
+import { nativeRequire } from "../../runtime/nativeRequire.js";
 
 export interface SerialPortInfo {
   path: string;
@@ -34,7 +37,7 @@ let cached: SerialPortCtor | null | undefined;
 export async function loadSerialPort(warn: (msg: string, err?: unknown) => void): Promise<SerialPortCtor | null> {
   if (cached !== undefined) return cached;
   try {
-    const mod = (await import("serialport")) as unknown as { SerialPort: SerialPortCtor };
+    const mod = nativeRequire("serialport") as { SerialPort: SerialPortCtor };
     cached = mod.SerialPort;
   } catch (err) {
     warn("無法載入 serialport（原生模組未安裝或編譯失敗）。實體序列裝置將停用；請修正安裝或確認平台支援。", err);
