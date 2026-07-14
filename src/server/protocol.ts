@@ -1,12 +1,5 @@
-// WMS 裝置代理的 WebSocket 線上協定（全新精簡版，v1）。
-//
-// 設計要點：
-// - 每則訊息都是 JSON，含固定信封欄位：{ v:協定版本, type:訊息型別, ts:epoch ms, ...payload }。
-// - 伺服器→用戶端 與 用戶端→伺服器 各有明確的 type 集合；以 type 作 discriminated union。
-// - 心跳：底層用 WebSocket ping/pong frame 偵測死連線；應用層另提供 ping→pong 供前端量延遲。
-// - 訂閱：用戶端可只訂閱部分 topic（scan/weight/device-status），預設全收。
-//
-// 前端對接：連上後第一則必為 welcome（含 agent 資訊與目前裝置快照）。之後即時收 scan/weight/device-status。
+// WS 線上協定 v1：每則訊息為 JSON 信封 { v, type, ts, ...payload }。
+// 伺服器→用戶端以 build 建構；用戶端→伺服器以 zod 驗證。
 
 import { z } from "zod";
 import type { DeviceSnapshot, DeviceStatus, DeviceKind } from "../core/types.js";
@@ -62,7 +55,7 @@ export interface AckMessage extends Envelope<"ack"> {
 export interface ErrorMessage extends Envelope<"error"> {
   code: string;
   message: string;
-  /** 若該錯誤是回應某個帶 ref 的指令，回填其 ref 方便用戶端對應；否則為 null。 */
+  /** 回應帶 ref 的指令時回填，否則 null。 */
   ref: string | null;
 }
 
@@ -141,9 +134,7 @@ const SubscribeSchema = z.object({
   type: z.literal("subscribe"),
   topics: z.array(z.enum(["scan", "weight", "device-status"])).default([...ALL_TOPICS]),
 });
-// 焦點認領（交警模式核心）：WMS 頁面在前景/可見時送 active:true 主動認領掃碼，
-// 失焦/隱藏時送 active:false 釋放。認領帶 TTL（見 WsServer），頁面需在可見時定期續約；
-// 一旦頁面當機停止續約，認領逾時自動失效，掃碼即退回系統鍵盤模擬（打進其他 app）。
+// 焦點認領：前景送 active:true（需定期續約，見 WsServer TTL），失焦送 false。
 const FocusSchema = z.object({
   type: z.literal("focus"),
   active: z.boolean(),

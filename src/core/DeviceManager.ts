@@ -1,13 +1,10 @@
-// 裝置註冊處與生命週期管理：
-// - 訂閱 DeviceBus 'device-status'，維護「目前每個裝置的最新狀態」快照（給 /devices 與 WS welcome 用）；
-// - 統一啟動／停止所有驅動（Driver）。
-// 驅動本身負責偵測、開埠、解析並 emit 事件；DeviceManager 不碰硬體，只彙整狀態與掌管生命週期。
+// 驅動生命週期管理＋裝置狀態快照（供 /devices 與 WS welcome）。
 
 import type { DeviceBus } from "./DeviceBus.js";
 import type { DeviceSnapshot, DeviceStatusEvent } from "./types.js";
 import type { Logger } from "../logger.js";
 
-// 所有裝置驅動的共同介面。一個 Driver 可管理 0..N 個實體裝置。
+// 裝置驅動共同介面；一個 Driver 可管理 0..N 個實體裝置。
 export interface DeviceDriver {
   /** 驅動名稱（log 用）。 */
   readonly name: string;

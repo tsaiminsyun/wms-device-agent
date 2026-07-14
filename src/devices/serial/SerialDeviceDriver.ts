@@ -1,10 +1,5 @@
-// 序列裝置驅動共用底座：負責「埠的探索 / 熱插拔 / 開關 / 分行」，
-// 把「哪些埠是我的」與「每一行怎麼處理」交給子類別（掃碼槍 / 電子秤）實作。
-//
-// 探索策略：定時輪詢 SerialPort.list()（跨平台最可靠），與目前已開的埠比對：
-//   - 出現新的、且符合本驅動 selectPort() 的埠 → 開啟並掛上讀取；
-//   - 原本開著但已從清單消失（拔除）→ 關閉並回報 removed。
-// 只讀不寫，降低對其他序列裝置的干擾。
+// 序列驅動底座：輪詢 SerialPort.list() 做埠探索/熱插拔/開關/分行（只讀不寫）；
+// 子類別實作 selectPort()（哪些埠是我的）與 handleLine()（一行怎麼處理）。
 
 import { LineFramer } from "../../parsing/LineFramer.js";
 import { OPEN_RETRY_COOLDOWN_MS, PollLoop, RetryCooldown } from "../hotplug.js";
@@ -20,7 +15,7 @@ import {
   type SerialPortInstance,
 } from "./serialLoader.js";
 
-// 斷流自動重連的最小間隔：即使裝置持續無資料，也至多每此毫秒數重開一次，避免洗 log／狀態閃爍。
+// 斷流自動重連的最小間隔（節流）。
 const REOPEN_MIN_INTERVAL_MS = 60_000;
 
 // 跨驅動共享：避免兩個驅動同時搶開同一個實體埠。
@@ -54,9 +49,9 @@ interface OpenEntry {
   handle: SerialPortHandle;
   identified: boolean;
   closing: boolean;
-  /** 最近一次收到序列資料的時間（epoch ms）；供 liveness 監看判斷是否斷流。 */
+  /** 最近收到資料的時間（斷流監看用）。 */
   lastDataAt: number;
-  /** 目前是否已因斷流被標記為離線（避免重複 emit）。 */
+  /** 已因斷流標記為離線。 */
   stale: boolean;
 }
 
@@ -74,8 +69,8 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
 
   private readonly open = new Map<string, OpenEntry>(); // path → entry
   private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS);
-  // 斷流自動重連的節流：path → 上次觸發重連的時間，避免對「僅是關機」的裝置狂關狂開洗 log。
-  private readonly lastReopenAt = new Map<string, number>();
+  // 斷流自動重連的節流。
+  private readonly reopenThrottle = new RetryCooldown(REOPEN_MIN_INTERVAL_MS);
   private loop: PollLoop | null = null;
   private SerialPort: SerialPortCtor | null = null;
   private counter = 0;
@@ -91,41 +86,34 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.log = parentLog.child(this.constructor.name);
   }
 
-  // 子類別：判斷一個（尚未開啟的）埠是否屬於本驅動。
+  // 子類別：判斷埠是否屬於本驅動。
   protected abstract selectPort(info: SerialPortInfo, normalizedVendorId: string | null): boolean;
 
   // 子類別：處理一行資料。
   protected abstract handleLine(line: string, h: SerialPortHandle): void;
 
-  // 子類別可覆寫：埠開啟瞬間的狀態（掃碼槍直接 connected；電子秤先中性、待指紋升級）。
+  // 子類別可覆寫：埠開啟瞬間的狀態回報。
   protected onOpen(h: SerialPortHandle): void {
     h.pushStatus("connected", chipText(h.info));
     this.log.info(`[${h.uid}] 已開啟 ${h.info.path}｜${chipText(h.info) || "無 VID/PID"}`);
   }
 
-  // 斷流監看：持續串流的裝置（電子秤）超過此毫秒數沒收到資料 → 視為離線（可能關機／線路異常）。
-  // null＝停用（如掃碼槍平時不主動送資料，不適用）。子類別覆寫以啟用。
+  // 斷流監看：逾此毫秒無資料視為離線；null=停用（子類別覆寫啟用）。
   protected readonly livenessTimeoutMs: number | null = null;
 
-  // serialport 的 hupcl 選項（預設 true）。語意依平台不同：
-  //   - Unix：true＝關埠時把 DTR 拉低（HUPCL）；false＝關埠不動 DTR。
-  //   - Windows：true＝開埠時拉高 DTR（DTR_CONTROL_ENABLE）；false＝完全不拉 DTR（DISABLE）。
-  // 共同點：設 false 後，程式開關埠「不會產生 DTR 高→低邊緣」。
-  // 部分電子秤把 DTR 落下邊緣當成休眠指令、且要重新上電（拔插 USB）才醒——這正是
-  // 「重啟程式後秤失聯、必須拔插」的元兇。這類裝置的子類別應覆寫為 false。
+  // serialport hupcl：false=程式開關埠不產生 DTR 高→低邊緣。
+  // 部分電子秤把 DTR 落下當休眠且需重新上電才醒，這類裝置的子類別應覆寫為 false。
   protected readonly hupcl: boolean = true;
 
-  // 斷流自動重連：裝置持續無資料超過此毫秒數，主動關閉並重開序列埠（相當於「軟體版重插」），
-  // 以救回卡死的序列控制代碼（例如舊實例殘留、驅動狀態異常）而不必手動拔插。null＝停用。
-  // 節流至每 REOPEN_MIN_INTERVAL_MS 至多一次，避免對單純關機的裝置反覆開關。
+  // 斷流逾此毫秒則關閉重開埠（軟體重插）救回卡死的控制代碼；null=停用。
   protected readonly livenessRecoveryMs: number | null = null;
 
-  // 子類別可覆寫：偵測到斷流（裝置就緒後停止送資料）時的狀態回報，預設標為 error（前端顯示紅燈）。
+  // 子類別可覆寫：斷流時的狀態回報。
   protected onLivenessLost(h: SerialPortHandle): void {
     h.pushStatus("error", "裝置無回應（可能已關機或線路異常）");
   }
 
-  // 子類別可覆寫：資料恢復時的狀態回報，預設回到 connected。
+  // 子類別可覆寫：資料恢復時的狀態回報。
   protected onLivenessRestored(h: SerialPortHandle): void {
     h.pushStatus("connected", chipText(h.info));
   }
@@ -143,13 +131,11 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   async stop(): Promise<void> {
     this.loop?.stop();
     this.loop = null;
-    const paths = [...this.open.keys()];
+    const entries = [...this.open.entries()];
     await Promise.allSettled(
-      paths.map(
-        (path) =>
+      entries.map(
+        ([, e]) =>
           new Promise<void>((res) => {
-            const e = this.open.get(path);
-            if (!e) return res();
             e.closing = true;
             try {
               e.port.close(() => res());
@@ -159,15 +145,13 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
           }),
       ),
     );
-    for (const path of paths) this.registry.release(path);
+    for (const [path] of entries) this.registry.release(path);
     this.open.clear();
     this.retry.reset();
-    this.lastReopenAt.clear();
+    this.reopenThrottle.reset();
   }
 
-  // 斷流監看：已開啟且啟用 liveness 的裝置，超過 livenessTimeoutMs 沒收到資料 → 標為離線（紅燈）。
-  // 埠仍在（USB-serial 晶片供電）故不會觸發拔除偵測；靠此補足「秤關機但線還插著」的情境。
-  // 若再啟用 livenessRecoveryMs，斷流更久則主動關閉並重開該埠（軟體版重插）救回卡死的控制代碼。
+  // 斷流監看與自動重連（補足「裝置關機但埠還在」的情境）。
   private checkLiveness(): void {
     if (this.livenessTimeoutMs == null) return;
     const now = Date.now();
@@ -179,15 +163,12 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         this.log.warn(`[${entry.handle.uid}] 逾 ${this.livenessTimeoutMs}ms 無資料 → 標記離線`);
         this.onLivenessLost(entry.handle);
       }
-      // 斷流過久 → 軟體重插（關閉後由輪詢重開）。節流避免對單純關機的裝置反覆開關。
-      if (this.livenessRecoveryMs != null && idleMs > this.livenessRecoveryMs) {
-        const lastReopen = this.lastReopenAt.get(path) ?? 0;
-        if (now - lastReopen >= REOPEN_MIN_INTERVAL_MS) {
-          this.lastReopenAt.set(path, now);
-          this.log.info(`[${entry.handle.uid}] 斷流逾 ${this.livenessRecoveryMs}ms → 自動重連（關閉後重開 ${path}）`);
-          this.detach(path, entry, "斷流自動重連");
-          this.retry.clear(path); // 讓下一輪輪詢立即重開，不受開啟失敗冷卻影響
-        }
+      // 斷流過久 → 關閉後由輪詢重開（軟體重插）。
+      if (this.livenessRecoveryMs != null && idleMs > this.livenessRecoveryMs && !this.reopenThrottle.isCoolingDown(path)) {
+        this.reopenThrottle.schedule(path);
+        this.log.info(`[${entry.handle.uid}] 斷流逾 ${this.livenessRecoveryMs}ms → 自動重連（關閉後重開 ${path}）`);
+        this.detach(path, entry, "斷流自動重連");
+        this.retry.clear(path); // 讓下一輪輪詢立即重開，不受開啟失敗冷卻影響
       }
     }
   }
@@ -204,7 +185,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         if (!seen.has(path)) this.detach(path, entry, "拔除");
       }
       this.retry.prune(seen);
-      for (const path of this.lastReopenAt.keys()) if (!seen.has(path)) this.lastReopenAt.delete(path);
+      this.reopenThrottle.prune(seen);
 
       // 偵測新增：符合條件、尚未開啟、未被其他驅動占用、且不在重試冷卻中。
       for (const info of ports) {
@@ -269,8 +250,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       for (const line of framer.push(text)) this.handleLine(line, handle);
     });
     port.on("error", (err: Error) => {
-      // 最常見：autoOpen 開埠失敗（"Cannot lock port"＝被其他程序／另一個 agent 實例佔用）。
-      // 此時埠未真正開啟 → 釋放並設冷卻，讓之後輪詢重試（佔用方放開後即自動恢復），不卡在 error。
+      // autoOpen 失敗（如 "Cannot lock port"＝被占用）：埠未開 → 釋放並冷卻後重試。
       if (!entry.port.isOpen) {
         this.log.warn(
           `[${uid}] 開啟 ${info.path} 失敗：${err.message}（${this.retry.cooldownMs / 1000}s 後重試；常見原因：埠被其他程序佔用）`,
@@ -294,7 +274,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.registry.release(path);
     entry.framer.reset();
     try {
-      // 先移除我們掛的監聽器，避免關閉過程的殘留事件持有 entry/framer 閉包造成熱插拔洩漏。
+      // 先移除監聽器再關閉，避免殘留事件持有閉包造成洩漏。
       entry.port.removeAllListeners("data");
       entry.port.removeAllListeners("open");
       entry.port.removeAllListeners("error");
@@ -319,7 +299,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   }
 }
 
-// 常見 USB-serial 轉接晶片 VID → 名稱（桌秤多為 RS232 經晶片轉 USB）。
+// 常見 USB-serial 晶片 VID → 名稱。
 const SERIAL_CHIPS: Record<string, string> = {
   "1a86": "CH340",
   "0403": "FTDI",

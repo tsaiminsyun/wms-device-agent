@@ -1,9 +1,5 @@
-// 原生選用相依（serialport / node-hid / nut.js）的統一載入器。
-//
-// 為何用 createRequire 而非 import()：打包成單一執行檔（Node SEA，見 packaging/windows/）時，
-// 原生 .node 模組無法嵌入 exe，須從 exe 旁的 node_modules 載入；SEA 內建的 require 只支援
-// builtin 模組，必須以 createRequire(process.execPath) 從磁碟解析。
-// 開發模式（tsx）與編譯後（dist/）則照常從專案 node_modules 解析，行為不變。
+// 原生選用相依的統一載入器：SEA 打包時的 require 只支援 builtin，
+// 須以 createRequire(process.execPath) 從 exe 旁的 node_modules 解析；開發/dist 照常解析。
 
 import { createRequire } from "node:module";
 
@@ -13,7 +9,7 @@ export function isSeaBuild(): boolean {
     const sea = createRequire(import.meta.url)("node:sea") as { isSea?: () => boolean };
     return sea.isSea?.() ?? false;
   } catch {
-    return false;
+    return false; // node:sea 不存在（舊版 Node）
   }
 }
 

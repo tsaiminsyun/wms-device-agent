@@ -1,5 +1,4 @@
-// 全代理共用的領域型別：裝置種類、狀態、以及內部事件匯流排（DeviceBus）的事件 payload。
-// 注意：這些是「內部」型別；對外（WebSocket）的線上協定另定義於 server/protocol.ts。
+// 內部領域型別；對外 WS 協定另見 server/protocol.ts。
 
 export type DeviceKind = "scanner" | "scale";
 

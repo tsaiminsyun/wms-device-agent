@@ -1,16 +1,8 @@
-// 掃碼去重：抑制「連續重複讀到同一條碼」。
-// 情境：掃碼槍在 presentation / 連續（continuous / auto-trigger）模式下，只要視野內有一張條碼，
-// 就會每隔數百毫秒重覆讀同一條，agent 每次都當成一次掃碼 → 洗版、且鍵盤退路會不停打字。
-//
-// 規則（每個裝置各自獨立，以 key 區分）：
-//   - 條碼與上次不同 → 立即放行（emit）。
-//   - 條碼與上次相同，且距上次「放行或被抑制」的時間 < windowMs → 抑制，並把時間往後延
-//     （因此連續重讀期間只會放行第一筆，其餘全部抑制，直到出現一段空檔）。
-//   - 空檔超過 windowMs 後再讀到同一條 → 視為新的一次刻意掃碼，放行。
-// windowMs = 0 代表關閉去重（全部放行）。
-//
-// 為何用「延長抑制」而非固定時間窗：presentation 模式的重讀間隔很短，固定窗會週期性漏放；
-// 延長式可在持續重讀時完全壓住，只有真正停下再掃（有空檔）才會再放行，不影響刻意的重複掃描。
+// 掃碼去重：抑制 presentation/連續模式下同一條碼的連續重讀（延長式抑制，只放行第一筆，
+// 出現空檔後同碼再讀視為刻意重掃）。windowMs=0 關閉。
+
+import type { DeviceBus } from "../core/DeviceBus.js";
+import type { Logger } from "../logger.js";
 
 export class ScanDebouncer {
   private readonly state = new Map<string, { last: string; ts: number }>();
@@ -36,5 +28,33 @@ export class ScanDebouncer {
   /** 裝置移除時清掉其狀態。 */
   forget(key: string): void {
     this.state.delete(key);
+  }
+}
+
+// 兩種掃碼槍驅動共用的掃碼出口：去重 → log → emit 'scan'。
+export class ScanEmitter {
+  private readonly dedup: ScanDebouncer;
+
+  constructor(
+    private readonly bus: DeviceBus,
+    private readonly log: Logger,
+    private readonly deviceName: string,
+    dedupWindowMs: number,
+  ) {
+    this.dedup = new ScanDebouncer(dedupWindowMs);
+  }
+
+  emit(uid: string, barcode: string): void {
+    if (!this.dedup.accept(uid, barcode)) {
+      this.log.debug(`[${uid}] 連續重讀，抑制：${barcode}`);
+      return;
+    }
+    this.log.info(`[${uid}] 掃碼：${barcode}（${barcode.length} 字）`);
+    this.bus.emit("scan", { deviceId: uid, deviceName: this.deviceName, barcode, kind: "scanner", ts: Date.now() });
+  }
+
+  /** 裝置移除時清掉其去重狀態。 */
+  forget(uid: string): void {
+    this.dedup.forget(uid);
   }
 }

@@ -1,5 +1,4 @@
-// 極簡結構化 logger：帶時間戳與等級，不引入第三方相依。
-// 等級門檻由 config 設定後呼叫 setLogLevel() 套用。
+// 極簡分級 logger（無第三方相依）。
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 

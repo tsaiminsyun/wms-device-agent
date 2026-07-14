@@ -1,8 +1,4 @@
-// node-hid 是「選用原生相依」(optionalDependencies)：載入失敗（未安裝／編譯失敗／平台不支援）時
-// 回 null 並告警一次，讓 HID 掃碼槍功能停用但不影響代理其餘部分。
-// 一律懶載入（nativeRequire，支援 SEA 打包）。
-//
-// 為了讓 typecheck 不被「node-hid 是否已安裝」綁住，這裡只宣告本專案用到的最小介面。
+// 懶載入 node-hid（選用原生相依）：失敗回 null 並告警一次；只宣告用到的最小介面。
 
 import { nativeRequire } from "../../runtime/nativeRequire.js";
 
@@ -36,7 +32,7 @@ export async function loadNodeHid(warn: (msg: string, err?: unknown) => void): P
   if (cached !== undefined) return cached;
   try {
     const mod = nativeRequire("node-hid") as HidModule & { default?: HidModule };
-    const resolved = (mod.default ?? mod) as HidModule;
+    const resolved = (mod.default ?? mod) as HidModule; // CJS：具名或 default 皆可能
     if (typeof resolved.devices !== "function" || typeof resolved.HID !== "function") {
       throw new Error("node-hid 介面不符預期（缺 devices() 或 HID）");
     }
@@ -48,7 +44,7 @@ export async function loadNodeHid(warn: (msg: string, err?: unknown) => void): P
   return cached;
 }
 
-// node-hid 的 vendorId / productId 是數字 → 正規化成小寫 4 碼 hex 字串，方便與設定比對及顯示。
+// 數字 id → 小寫 4 碼 hex 字串。
 export function hex4(id: number): string {
   return (id >>> 0).toString(16).padStart(4, "0");
 }

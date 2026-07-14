@@ -1,5 +1,4 @@
-// 型別安全的事件匯流排：所有裝置驅動把訊號 emit 到這裡，server / traffic-cop 在此訂閱。
-// 以 Node EventEmitter 為底，外覆強型別介面（避免事件名打錯、payload 型別不符）。
+// 型別安全事件匯流排：驅動 emit，server / traffic-cop 訂閱。
 
 import { EventEmitter } from "node:events";
 import type { DeviceBusEvents } from "./types.js";
@@ -8,7 +7,7 @@ export class DeviceBus {
   private readonly emitter = new EventEmitter();
 
   constructor() {
-    // 裝置可能很多，放寬監聽上限避免 Node 的記憶體洩漏警告誤報。
+    // 放寬監聽上限，避免誤報洩漏警告。
     this.emitter.setMaxListeners(50);
   }
 

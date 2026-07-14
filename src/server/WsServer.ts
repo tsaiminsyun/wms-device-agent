@@ -1,16 +1,5 @@
-// WebSocket 伺服器：把 DeviceBus 的訊號送給連上的網頁用戶端。
-// - 掛在共用的 http.Server 上（同一個埠），只接受白名單 Origin、且路徑為設定的 wsPath 的 upgrade。
-// - 連上即送 welcome（agent 資訊 + 目前裝置快照）。
-// - 心跳：以 WebSocket ping/pong frame 偵測並清除死連線（瀏覽器會自動回應 ping）。
-// - 訂閱：用戶端可選擇只收部分 topic；預設全收。
-//
-// 路由分工（交警模式）：
-//   - weight / device-status：一律廣播給所有訂閱的用戶端。
-//   - scan：由 TrafficCop 決定——有「焦點認領（claim）」的 WMS 頁面在線時，呼叫 broadcastScan() 只送給認領者；
-//     否則 TrafficCop 走系統鍵盤模擬（打進其他 app）。WsServer 本身不自動廣播 scan，確保 scan 不會雙路送出。
-//
-// 焦點認領：用戶端送 { type:'focus', active:true } 認領、active:false 釋放；認領帶 TTL，
-// 頁面需於可見時定期續約（重送 active:true）。頁面當機停止續約 → 認領逾時失效 → 掃碼退回鍵盤。
+// WebSocket 伺服器：Origin 白名單、心跳、訂閱、焦點認領（TTL 內續約才有效）。
+// weight/device-status 廣播給訂閱者；scan 僅由 TrafficCop 經 broadcastScan() 送給認領者（不雙送）。
 
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server as HttpServer } from "node:http";
@@ -31,9 +20,9 @@ import type { DeviceBusEvents, ScanEvent } from "../core/types.js";
 import type { Logger } from "../logger.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
-// 焦點認領存活時間：頁面需在此時間內續約（重送 focus active:true），否則認領逾時失效。
+// 焦點認領存活時間：需在此時間內續約，否則失效。
 const CLAIM_TTL_MS = 6_000;
-// 同時連線上限（本機服務，正常 1~數個分頁；上限只為防呆／防失控）。
+// 同時連線上限（防呆）。
 const MAX_CONNECTIONS = 50;
 
 interface ClientState {
@@ -43,7 +32,7 @@ interface ClientState {
   origin: string;
   /** 是否認領掃碼（前景/可見的 WMS 頁面）。 */
   focusActive: boolean;
-  /** 認領逾時時間（epoch ms）；focusActive 且 now < 此值才算有效認領。 */
+  /** 認領逾時時間（epoch ms）。 */
   focusExpiresAt: number;
 }
 
@@ -55,7 +44,7 @@ export class WsServer {
   private heartbeat: NodeJS.Timeout | null = null;
   private counter = 0;
   private readonly boundUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
-  // 保存 bus 監聽器以便 stop() 時解除（避免重啟/測試時重複註冊與洩漏）。
+  // 保存 bus 監聽器供 stop() 解除。
   private busListeners: Partial<{ [K in keyof DeviceBusEvents]: (e: DeviceBusEvents[K]) => void }> = {};
 
   constructor(
@@ -66,7 +55,7 @@ export class WsServer {
     private readonly security: WsSecurity,
     private readonly wsPath: string,
   ) {
-    // maxPayload：本協定訊息極小，限 64KB 即綽綽有餘；關閉 perMessageDeflate 避免壓縮炸彈面。
+    // 訊息極小：限 64KB、關閉壓縮。
     this.wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
     this.boundUpgrade = (req, socket, head) => this.handleUpgrade(req, socket, head);
   }
@@ -81,10 +70,6 @@ export class WsServer {
     httpServer.off("upgrade", this.boundUpgrade);
   }
 
-  isOriginAllowed(origin: string | undefined): boolean {
-    return isOriginAllowed(origin, this.security);
-  }
-
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const url = req.url ?? "";
     const pathname = url.split("?")[0];
@@ -93,7 +78,7 @@ export class WsServer {
       return;
     }
     const origin = req.headers.origin;
-    if (!this.isOriginAllowed(origin)) {
+    if (!isOriginAllowed(origin, this.security)) {
       this.log.warn(`拒絕 WS 連線（Origin 不在白名單）：${origin ?? "(無 Origin)"}`);
       socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
       socket.destroy();
@@ -172,12 +157,12 @@ export class WsServer {
           state.focusExpiresAt = msg.active ? Date.now() + CLAIM_TTL_MS : 0;
           this.log.debug(`用戶端 #${state.id} 焦點認領：${msg.active ? "claim" : "release"}`);
         }
-        // 不回 ack：頁面會定期續約，避免每 2 秒一次 ack 造成雜訊。
+        // 不回 ack：續約頻繁，避免雜訊。
         break;
     }
   }
 
-  /** 啟動：訂閱 DeviceBus 的 weight/device-status（scan 由 TrafficCop 經 broadcastScan 路由），開始心跳。 */
+  /** 訂閱 DeviceBus 的 weight/device-status，開始心跳。 */
   start(): void {
     this.busListeners.weight = (e) => this.broadcast("weight", build.weight(e));
     this.busListeners["device-status"] = (e) => this.broadcast("device-status", build.deviceStatus(e));
@@ -257,7 +242,7 @@ export class WsServer {
     this.rawSend(ws, serialize(msg), this.clients.get(ws)?.id ?? -1);
   }
 
-  // 帶錯誤處理的送出：ws.send 可能在連線轉換中同步/非同步出錯，皆記 debug 不讓它中斷流程。
+  // ws.send 可能同步/非同步出錯，皆記 debug、不中斷流程。
   private rawSend(ws: WebSocket, payload: string, clientId: number): boolean {
     try {
       ws.send(payload, (err) => {

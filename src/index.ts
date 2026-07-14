@@ -1,6 +1,8 @@
 // wms-device-agent 進入點：載入設定 → 組裝裝置驅動 / WS / HTTP / 交警模式 → 啟動 → 優雅關閉。
 
+import { once } from "node:events";
 import { readFileSync } from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Server as HttpServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { createLogger, setLogLevel, type Logger } from "./logger.js";
@@ -17,7 +19,7 @@ import { WsServer } from "./server/WsServer.js";
 import { createApiServer } from "./server/httpApi.js";
 import { PROTOCOL_VERSION, type AgentInfo } from "./server/protocol.js";
 
-// 打包（SEA）時由 esbuild --define 注入；exe 旁沒有 package.json 可讀。
+// 打包（SEA）時由 esbuild --define 注入。
 declare const __PKG_META__: { name: string; version: string } | undefined;
 
 function readPackageMeta(): { name: string; version: string } {
@@ -33,40 +35,21 @@ function readPackageMeta(): { name: string; version: string } {
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// 監聽埠並容忍「舊實例尚未釋放埠」：
-//   1) EADDRINUSE 時先短暫重試，讓正常關閉中的舊實例把埠放掉再綁上；
-//   2) 重試若干次仍占用，嘗試「接管」——若占用者確實是我們自己的另一個實例（常見：收不到關閉訊號
-//      的孤兒程序），強制結束它以釋放埠與其卡住的序列埠，再繼續重試；
-//   3) 逾重試上限仍占用（且非本程式占用）才放棄，並給出可操作的錯誤訊息。
+// 監聽埠：被占用時重試；占用者若是本程式的殘留實例則強制接管，逾重試上限才放棄。
 async function listenWithRetry(server: HttpServer, port: number, host: string, log: Logger): Promise<void> {
   const MAX_ATTEMPTS = 10;
   const RETRY_DELAY_MS = 1000;
-  const TAKEOVER_AT_ATTEMPT = 3; // 先給正常關閉幾秒緩衝，仍占用才動用接管
+  const TAKEOVER_AT_ATTEMPT = 3; // 先給正常關閉緩衝，仍占用才接管
   let tookOver = false;
   for (let attempt = 1; ; attempt++) {
     try {
-      await new Promise<void>((resolve, reject) => {
-        const onError = (e: NodeJS.ErrnoException): void => {
-          server.removeListener("listening", onListening);
-          reject(e);
-        };
-        const onListening = (): void => {
-          server.removeListener("error", onError);
-          resolve();
-        };
-        server.once("error", onError);
-        server.once("listening", onListening);
-        server.listen(port, host);
-      });
+      server.listen(port, host);
+      await once(server, "listening"); // 'error' 事件會使 once() reject
       return;
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err.code !== "EADDRINUSE") throw err;
-      // 一次性接管：占用者若是我們自己的殘留實例就結束它（釋放埠與其占住的序列埠）。
+      // 一次性接管：結束我們自己的殘留實例。
       if (attempt >= TAKEOVER_AT_ATTEMPT && !tookOver) {
         tookOver = true;
         if (await freePortIfOwnedByUs(port, log)) {
@@ -184,14 +167,13 @@ async function main(): Promise<void> {
   log.info(`允許 Origin  ：${config.security.allowedOrigins.join(", ") || "(無)"}｜允許無 Origin：${config.security.allowNoOrigin}`);
   log.info("──────────────────────────────────────────────");
 
-  // ---- 優雅關閉：務必釋放埠，避免重啟時「埠被占用」（EADDRINUSE）----
+  // ---- 優雅關閉（務必釋放埠）----
   let shuttingDown = false;
   const shutdown = async (sig: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info(`收到 ${sig}，開始關閉…`);
-    // 看門狗：不論下方清理是否卡住（如 serialport 關閉未回呼），都在時限內強制結束，
-    // 確保程序一定會退出並釋放埠。unref 讓它不阻止正常退出。
+    // 看門狗：清理卡住也要在時限內強制退出以釋放埠。
     const watchdog = setTimeout(() => {
       log.warn("關閉逾時，強制結束以釋放埠。");
       process.exit(0);
@@ -202,8 +184,7 @@ async function main(): Promise<void> {
       await deviceManager.stopAll();
       await wsServer.stop();
       wsServer.detach(httpServer);
-      // 強制斷開殘留連線（含開著的 WebSocket）——否則 httpServer.close() 會等到所有連線結束才回呼，
-      // 導致程序遲遲不退出、埠一直被占用，下次啟動就 EADDRINUSE。
+      // 強制斷開殘留連線，否則 close() 會等所有連線結束、程序無法退出。
       if (typeof httpServer.closeAllConnections === "function") httpServer.closeAllConnections();
       await new Promise<void>((res) => httpServer.close(() => res()));
     } catch (err) {
@@ -214,8 +195,7 @@ async function main(): Promise<void> {
       process.exit(0);
     }
   };
-  // 訊號：SIGINT(Ctrl+C)、SIGTERM、SIGHUP（Windows 關閉主控台視窗 / POSIX 終端斷線）、SIGBREAK(Windows Ctrl+Break)。
-  // 用工作管理員「結束工作」或 taskkill（非 /F）會走這些路徑；/F 強制結束則由 OS 直接回收埠。
+  // 關閉訊號：SIGINT / SIGTERM / SIGHUP / SIGBREAK(Windows)。
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGHUP", () => void shutdown("SIGHUP"));

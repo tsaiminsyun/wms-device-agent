@@ -1,5 +1,4 @@
-// 設定載入：預設值 → 執行目錄的 config.json（選用）→ 環境變數覆寫（最高優先）。
-// 以 zod 驗證最終結果，確保型別與範圍正確；驗證失敗直接拋錯（fail fast）。
+// 設定載入：預設值 → config.json → 環境變數（最高優先）；zod 驗證，失敗即拋錯。
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -9,15 +8,14 @@ import type { LogLevel } from "./logger.js";
 
 const LogLevelSchema = z.enum(["debug", "info", "warn", "error"]);
 
-// 序列裝置 vendorId 一律正規化成小寫無 0x 前綴的 4 碼 hex（與 serialport list 回傳一致）。
-// 容忍輸入帶 0x 前綴或大寫（例 "0x05E0" / "5E0" → "05e0"）。
+// vendorId 正規化：去 0x、轉小寫、補至 4 碼 hex。
 const VendorIdSchema = z
   .string()
   .transform((s) => s.trim().replace(/^0x/i, "").toLowerCase())
   .pipe(z.string().regex(/^[0-9a-f]{1,4}$/, "vendorId 需為 1~4 碼 hex"))
   .transform((s) => s.padStart(4, "0"));
 
-// HID usage page：接受十進位數字（如 140）或 0x 前綴的 hex 字串（如 "0x8c"）→ 一律轉成數字。
+// usage page：接受十進位數字或 "0x" hex 字串 → 一律轉成數字。
 const UsagePageSchema = z.union([z.number().int().nonnegative(), z.string()]).transform((v, ctx) => {
   if (typeof v === "number") return v;
   const m = v.trim().match(/^0x([0-9a-fA-F]+)$/);
@@ -28,8 +26,10 @@ const UsagePageSchema = z.union([z.number().int().nonnegative(), z.string()]).tr
   return parseInt(m[1] as string, 16);
 });
 
-// 注意：每個子物件都加 .default({})，這樣即使整段缺席（例如沒有 config.json）
-// zod 也會先填入 {} 再套用各欄位的預設值，而不是把整段視為 Required 報錯。
+// 掃碼去重窗（毫秒）：窗內同一條碼只送第一筆；0=關閉。
+const DedupWindowMsSchema = z.number().int().min(0).default(1500);
+
+// 每個子物件都加 .default({})：整段缺席時仍套用各欄位預設，而非報 Required。
 export const ConfigSchema = z.object({
   server: z
     .object({
@@ -51,22 +51,17 @@ export const ConfigSchema = z.object({
       baudRate: z.number().int().positive().default(9600),
       path: z.string().nullable().default(null),
       keyboardFallback: z.boolean().default(true),
-      // 抑制「連續重複讀同一條碼」：同一條碼在此毫秒數內重複出現視為 presentation/連續模式重掃，
-      // 只送第一筆、其餘略過，直到出現空檔或不同條碼。設 0 關閉。
-      dedupWindowMs: z.number().int().min(0).default(1500),
+      dedupWindowMs: DedupWindowMsSchema,
     })
     .default({}),
-  // HID 掃碼槍（HID-POS / IBM / SNAPI 模式，走 node-hid）。與 CDC 的 scanner 可同時啟用，互不衝突。
-  // usagePages 預設空陣列＝接受該廠牌「任何非鍵盤/滑鼠」的 collection（比照瀏覽器 WebHID 只用 vendorId 過濾）；
-  // 要限定可填如 ["0x8c"]。鍵盤(0x1/0x6)、滑鼠(0x1/0x2)一律排除（OS 保護、node 讀不到）。
+  // HID 掃碼槍（HID-POS/IBM，node-hid）；usagePages 空陣列＝接受任何非鍵盤/滑鼠 collection。
   hidScanner: z
     .object({
       enabled: z.boolean().default(true),
       vendorIds: z.array(VendorIdSchema).default(["05e0"]),
       usagePages: z.array(UsagePageSchema).default([]),
       reportHeaderBytes: z.number().int().min(0).max(64).default(4),
-      // 同 scanner.dedupWindowMs：抑制連續重複讀同一條碼（presentation/連續模式）。設 0 關閉。
-      dedupWindowMs: z.number().int().min(0).default(1500),
+      dedupWindowMs: DedupWindowMsSchema,
     })
     .default({}),
   scale: z
@@ -94,7 +89,7 @@ export const ConfigSchema = z.object({
 export type AppConfig = z.infer<typeof ConfigSchema>;
 
 function readConfigFile(): unknown {
-  // 依序找：工作目錄 → （打包成 exe 時）exe 所在目錄；後者讓雙擊/排程啟動不受工作目錄影響。
+  // 依序找：工作目錄 → （SEA 打包時）exe 所在目錄。
   const candidates = [resolve(process.cwd(), "config.json")];
   if (isSeaBuild()) candidates.push(join(dirname(process.execPath), "config.json"));
 
@@ -102,7 +97,7 @@ function readConfigFile(): unknown {
     try {
       return JSON.parse(readFileSync(path, "utf8"));
     } catch (err) {
-      // 找不到檔案是正常情形（試下一個候選／用預設）；只有 JSON 壞掉才警告。
+      // 檔案不存在屬正常；JSON 壞掉才警告。
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         console.warn(`[config] 讀取 ${path} 失敗，改用預設值：`, (err as Error).message);
         return {};

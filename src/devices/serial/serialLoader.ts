@@ -1,9 +1,4 @@
-// serialport 是「選用原生相依」(optionalDependencies)：在無法編譯原生模組的環境（或刻意不裝）時
-// 仍能啟動代理（只是實體序列裝置停用）。因此一律懶載入（nativeRequire，支援 SEA 打包），
-// 載入失敗就回 null 並告警一次。
-//
-// 為了讓 typecheck 不被「serialport 是否已安裝」綁住，這裡只宣告本專案實際用到的最小介面，
-// 不直接引用 serialport 自身的型別定義。
+// 懶載入 serialport（選用原生相依）：失敗回 null 並告警一次；只宣告用到的最小介面。
 
 import { nativeRequire } from "../../runtime/nativeRequire.js";
 
@@ -47,7 +42,7 @@ export async function loadSerialPort(warn: (msg: string, err?: unknown) => void)
   return cached;
 }
 
-// vendorId/productId 在不同平台可能大小寫不一、長度不一 → 正規化成小寫 4 碼 hex 方便比對。
+// 正規化成小寫 4 碼 hex（各平台大小寫/長度不一）。
 export function normalizeHexId(id: string | undefined): string | null {
   if (!id) return null;
   const cleaned = id.replace(/^0x/i, "").toLowerCase();

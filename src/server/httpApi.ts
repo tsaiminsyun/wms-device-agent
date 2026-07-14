@@ -1,11 +1,5 @@
-// HTTP 狀態 API（與 WebSocket 共用同一個 http.Server / 同一個埠）。
-// 主要給 [FE][API]「檢查設備連線狀態」使用：
-//   GET /health        → 代理是否存活、版本、平台、執行時間
-//   GET /devices       → 目前各裝置連線狀態快照 + WS 用戶端數 / 認領數（核心：設備連線狀態）
-//   GET /              → 基本資訊與可用端點
-//
-// CORS：只對白名單 Origin 回應跨來源標頭；其餘瀏覽器請求會被瀏覽器自身擋下。
-// Origin 白名單：present-but-disallowed（或無 Origin 且 allowNoOrigin=false）一律回 403。
+// HTTP 狀態 API（與 WS 共用埠）：GET /health、/devices、/。
+// Origin 不在白名單一律 403；CORS 標頭只回給白名單 Origin。
 
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { isOriginAllowed, type OriginPolicy } from "./origin.js";
@@ -45,7 +39,7 @@ function handle(req: IncomingMessage, res: ServerResponse, deps: HttpApiDeps): v
   const method = req.method ?? "GET";
   const pathname = (req.url ?? "/").split("?")[0];
 
-  // Origin 白名單：不在白名單（或無 Origin 且 allowNoOrigin=false）一律擋下，所有路由一致處理。
+  // 不在白名單一律擋下，所有路由一致。
   if (!allowed) {
     if (method === "OPTIONS") return void res.writeHead(403).end();
     return sendJson(res, 403, { error: "origin-not-allowed" });

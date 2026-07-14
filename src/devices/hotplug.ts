@@ -1,5 +1,4 @@
-// 熱插拔輪詢共用元件：序列（serialport）與 HID（node-hid）驅動都以
-// 「定時列舉裝置 → 與已開啟清單比對」偵測插拔，這裡集中輪詢節奏與開啟失敗的重試冷卻。
+// 熱插拔輪詢共用元件：輪詢節奏（PollLoop）與失敗重試冷卻（RetryCooldown）。
 
 /** 開埠／開裝置失敗後的重試冷卻時間，避免每次輪詢都狂試與洗 log。 */
 export const OPEN_RETRY_COOLDOWN_MS = 5_000;

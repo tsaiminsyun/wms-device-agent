@@ -1,17 +1,7 @@
 #!/usr/bin/env bash
-# 打包 wms-device-agent 為 Windows x64 單一執行檔（Node SEA）。
-# 可在 macOS / Linux / CI 上執行（跨平台打包，不需 Windows 機器）。
-#
-# 產物：dist-win/
-#   wms-device-agent.exe   ← node.exe + 注入的 app bundle（我方程式碼 + ws/zod 等純 JS 相依）
-#   node_modules/          ← Windows 版原生相依（serialport / node-hid / nut.js），exe 於執行期載入
-#   config.json            ← 設定（複製自 config.example.json，部署時修改）
-#   start-agent.bat / install-autostart.bat / uninstall-autostart.bat / run-hidden.vbs
-#   README-WINDOWS.md
-# 並壓成 wms-device-agent-<version>-win-x64.zip。
-#
-# 注意：SEA blob 與 node.exe 版本綁定，兩者必須同版；本腳本以 mise 釘選的 Node 產 blob，
-# 並下載同版官方 Windows node.exe。
+# 打包 wms-device-agent 為 Windows x64 單一執行檔（Node SEA）＋原生相依 node_modules，
+# 產物在 dist-win/ 並壓成 zip。可在 macOS / Linux / CI 執行；內容說明見 README-WINDOWS.md。
+# 注意：SEA blob 與 node.exe 版本綁定，兩者必須同版。
 
 set -euo pipefail
 
@@ -38,9 +28,7 @@ rm -rf "$BUILD" "$DIST_ROOT"
 mkdir -p "$BUILD" "$DIST" "$CACHE"
 
 echo "==> [1/6] esbuild：bundle app → build/agent.cjs（Node ${NODE_VERSION}）"
-# - bufferutil / utf-8-validate：ws 的選用加速原生模組，缺席時 ws 自動退回純 JS，標 external 即可。
-# - __PKG_META__：exe 旁沒有 package.json，版本資訊於編譯期注入。
-# - import.meta.url：CJS bundle 沒有此值，以 banner 補上（nativeRequire / 開發期 fallback 需要）。
+# bufferutil/utf-8-validate 缺席時 ws 自動退回純 JS；__PKG_META__ 與 import.meta.url 於編譯期注入。
 pnpm exec esbuild src/index.ts \
   --bundle --platform=node --format=cjs --target=node22 \
   --outfile="$BUILD/agent.cjs" \

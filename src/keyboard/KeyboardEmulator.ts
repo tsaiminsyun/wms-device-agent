@@ -1,15 +1,10 @@
-// 系統鍵盤模擬（交警模式的「離線退路」）：以 nut.js 把字串「打字」進目前作業系統焦點所在的輸入框，
-// 並（選用）補一個 Enter，讓既有頁面的 Enter handler 不必改就能觸發送出。
-//
-// nut.js 是選用原生相依：載入失敗（未安裝 / 平台不支援 / 缺少權限）時自動降級為 no-op 並告警一次，
-// 確保代理在 macOS 開發或無原生模組的環境仍能啟動（只是少了鍵盤退路）。
-//
-// 注意：序列化送出——同時間多筆掃碼要排隊逐一打字，避免字元交錯。
+// 系統鍵盤模擬（nut.js，選用相依）：把條碼打進 OS 焦點輸入框（＋選用 Enter）。
+// 載入失敗自動降級為 no-op；多筆掃碼排隊逐一打字，避免交錯。
 
 import { nativeRequire } from "../runtime/nativeRequire.js";
 import type { Logger } from "../logger.js";
 
-// nut.js fork 的最小介面（避免 typecheck 綁定該選用相依是否安裝）。
+// nut.js 的最小介面（不綁定選用相依的型別）。
 interface NutKeyboard {
   type(input: string): Promise<unknown>;
   pressKey(key: number): Promise<unknown>;
@@ -47,12 +42,11 @@ export class KeyboardEmulator {
     }
     try {
       const m = nativeRequire("@nut-tree-fork/nut-js") as NutModule;
-      // 載入時驗證關鍵 API 形狀，避免 fork 版本變動造成靜默按錯鍵。
+      // 驗證關鍵 API 形狀，防 fork 版本變動。
       if (!m?.keyboard || typeof m.keyboard.type !== "function" || typeof m.Key?.Enter !== "number") {
         throw new Error("nut.js 介面不符預期（keyboard.type / Key.Enter 缺失）");
       }
-      // 不要逐字延遲，掃碼字串要盡快打完。
-      m.keyboard.config.autoDelayMs = 0;
+      m.keyboard.config.autoDelayMs = 0; // 逐字零延遲，盡快打完
       this.mod = m;
       this.log.info("鍵盤模擬（nut.js）已就緒。");
     } catch (err) {
@@ -80,7 +74,7 @@ export class KeyboardEmulator {
   private async doType(text: string): Promise<void> {
     const mod = await this.load();
     if (!mod) return;
-    // macOS 首次實際打字時提示：nut.js 需要「輔助使用 (Accessibility)」權限，否則會印警告且打不出字。
+    // macOS 需「輔助使用」權限；首次打字時提示一次。
     if (process.platform === "darwin" && !this.macHintShown) {
       this.macHintShown = true;
       this.log.warn(
