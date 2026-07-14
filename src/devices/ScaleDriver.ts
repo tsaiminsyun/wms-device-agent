@@ -14,6 +14,9 @@ import type { PortRegistry, SerialDriverOptions } from "./serial/SerialDeviceDri
 
 const WEIGHT_EPSILON = 0.005; // kg
 const NEUTRAL_NAME = "序列裝置（待辨識）";
+// 桌秤會持續串流讀數；逾此毫秒數無任何序列資料即視為離線（關機／拔線／線路異常）。
+// 取值需大於秤的串流間隔又能及時反映；監看以 serial.pollIntervalMs 為節奏檢查。
+const SCALE_LIVENESS_TIMEOUT_MS = 4000;
 
 interface LastEmit {
   kg: number;
@@ -24,6 +27,8 @@ export class ScaleDriver extends SerialDeviceDriver {
   readonly name = "ScaleDriver";
   protected readonly kind = "scale" as const;
   protected readonly displayName = "電子秤";
+  // 啟用斷流監看：秤關機但 USB-serial 晶片仍在（埠不會消失）時，靠此把狀態改為離線（紅）。
+  protected override readonly livenessTimeoutMs = SCALE_LIVENESS_TIMEOUT_MS;
 
   // 每個 uid 的最後送出值（去重用）。
   private readonly lastEmit = new Map<string, LastEmit>();
@@ -51,6 +56,11 @@ export class ScaleDriver extends SerialDeviceDriver {
     // 先中性連線，待指紋命中再升級為電子秤。
     h.pushStatus("connected", `${chipText(h.info)}（等待秤資料…）`, NEUTRAL_NAME);
     this.log.info(`[${h.uid}] 已開啟 ${h.info.path}｜${chipText(h.info) || "無 VID/PID"}（待資料指紋辨識）`);
+  }
+
+  protected override onLivenessLost(h: SerialPortHandle): void {
+    this.lastEmit.delete(h.uid); // 清去重快取：恢復送電後即使同重量也重新送出
+    h.pushStatus("error", "電子秤無資料（可能已關機或線路異常）");
   }
 
   protected handleLine(line: string, h: SerialPortHandle): void {

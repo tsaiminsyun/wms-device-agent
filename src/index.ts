@@ -57,6 +57,7 @@ async function main(): Promise<void> {
         registry,
         { baudRate: config.scanner.baudRate, forcedPath: config.scanner.path, pollIntervalMs: config.serial.pollIntervalMs },
         config.scanner.vendorIds,
+        config.scanner.dedupWindowMs,
       ),
     );
   }
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
         vendorIds: config.hidScanner.vendorIds,
         usagePages: config.hidScanner.usagePages,
         reportHeaderBytes: config.hidScanner.reportHeaderBytes,
+        dedupWindowMs: config.hidScanner.dedupWindowMs,
         pollIntervalMs: config.serial.pollIntervalMs,
       }),
     );

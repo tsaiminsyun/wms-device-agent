@@ -9,7 +9,15 @@
     "allowedOrigins": [
       "http://localhost:5173",
       "http://localhost:3000",
-      "http://twwms.daigobang.com"
+      "http://wms.daigobang.com",
+      "http://twwms.daigobang.com",
+      "http://uswms.daigobang.com",
+      "https://wms.daigobang.com",
+      "https://twwms.daigobang.com",
+      "https://uswms.daigobang.com",
+      "https://beta-twwms.daigobang.com",
+      "https://beta-uswms.daigobang.com",
+      "https://beta-wms.daigobang.com"
     ],
     "allowNoOrigin": true
   },

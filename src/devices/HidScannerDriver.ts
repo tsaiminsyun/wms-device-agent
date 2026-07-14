@@ -11,6 +11,7 @@
 
 import { parseHidPosReport } from "../parsing/hidPosReport.js";
 import { PollLoop, RetryCooldown, OPEN_RETRY_COOLDOWN_MS } from "./hotplug.js";
+import { ScanDebouncer } from "./scanDedup.js";
 import { loadNodeHid, hex4, type HidDeviceInfo, type HidDeviceInstance, type HidModule } from "./hid/hidLoader.js";
 import type { DeviceBus } from "../core/DeviceBus.js";
 import type { DeviceDriver } from "../core/DeviceManager.js";
@@ -23,6 +24,8 @@ export interface HidScannerOptions {
   usagePages: readonly number[];
   /** 解析 input report 時跳過的表頭位元組數（依機型可能需微調）。 */
   reportHeaderBytes: number;
+  /** 連續重讀同一條碼的抑制窗（毫秒）；0=關閉。 */
+  dedupWindowMs: number;
   pollIntervalMs: number;
 }
 
@@ -38,6 +41,7 @@ export class HidScannerDriver implements DeviceDriver {
 
   private readonly open = new Map<string, OpenEntry>(); // path → entry
   private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS);
+  private readonly dedup: ScanDebouncer;
   private readonly hinted = new Set<string>(); // 已印過「為何略過」提示的 path，避免洗 log
   private HID: HidModule | null = null;
   private loop: PollLoop | null = null;
@@ -50,6 +54,7 @@ export class HidScannerDriver implements DeviceDriver {
     private readonly opts: HidScannerOptions,
   ) {
     this.log = parentLog.child("HidScannerDriver");
+    this.dedup = new ScanDebouncer(opts.dedupWindowMs);
   }
 
   async start(): Promise<void> {
@@ -172,6 +177,10 @@ export class HidScannerDriver implements DeviceDriver {
     this.log.debug(`[${entry.uid}] report len=${data.length} hex=[${hex}] ascii="${ascii}"`);
 
     for (const barcode of parseHidPosReport(data, this.opts.reportHeaderBytes)) {
+      if (!this.dedup.accept(entry.uid, barcode)) {
+        this.log.debug(`[${entry.uid}] 連續重讀，抑制：${barcode}`);
+        continue;
+      }
       this.log.info(`[${entry.uid}] 掃碼：${barcode}（${barcode.length} 字）`);
       this.bus.emit("scan", {
         deviceId: entry.uid,
@@ -186,6 +195,7 @@ export class HidScannerDriver implements DeviceDriver {
   private detach(path: string, entry: OpenEntry, reason: string): void {
     if (!this.open.has(path)) return;
     this.open.delete(path);
+    this.dedup.forget(entry.uid);
     this.closeEntry(entry, reason);
     this.pushStatus(entry.uid, "removed", "");
   }

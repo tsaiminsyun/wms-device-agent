@@ -51,6 +51,10 @@ interface OpenEntry {
   handle: SerialPortHandle;
   identified: boolean;
   closing: boolean;
+  /** 最近一次收到序列資料的時間（epoch ms）；供 liveness 監看判斷是否斷流。 */
+  lastDataAt: number;
+  /** 目前是否已因斷流被標記為離線（避免重複 emit）。 */
+  stale: boolean;
 }
 
 export interface SerialDriverOptions {
@@ -94,6 +98,20 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.log.info(`[${h.uid}] 已開啟 ${h.info.path}｜${chipText(h.info) || "無 VID/PID"}`);
   }
 
+  // 斷流監看：持續串流的裝置（電子秤）超過此毫秒數沒收到資料 → 視為離線（可能關機／線路異常）。
+  // null＝停用（如掃碼槍平時不主動送資料，不適用）。子類別覆寫以啟用。
+  protected readonly livenessTimeoutMs: number | null = null;
+
+  // 子類別可覆寫：偵測到斷流（裝置就緒後停止送資料）時的狀態回報，預設標為 error（前端顯示紅燈）。
+  protected onLivenessLost(h: SerialPortHandle): void {
+    h.pushStatus("error", "裝置無回應（可能已關機或線路異常）");
+  }
+
+  // 子類別可覆寫：資料恢復時的狀態回報，預設回到 connected。
+  protected onLivenessRestored(h: SerialPortHandle): void {
+    h.pushStatus("connected", chipText(h.info));
+  }
+
   async start(): Promise<void> {
     this.SerialPort = await loadSerialPort((m, e) => this.log.warn(m, e));
     if (!this.SerialPort) {
@@ -128,8 +146,24 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.retry.reset();
   }
 
+  // 斷流監看：已開啟且啟用 liveness 的裝置，超過 livenessTimeoutMs 沒收到資料 → 標為離線（紅燈）。
+  // 埠仍在（USB-serial 晶片供電）故不會觸發拔除偵測；靠此補足「秤關機但線還插著」的情境。
+  private checkLiveness(): void {
+    if (this.livenessTimeoutMs == null) return;
+    const now = Date.now();
+    for (const entry of this.open.values()) {
+      if (entry.closing || entry.stale) continue;
+      if (now - entry.lastDataAt > this.livenessTimeoutMs) {
+        entry.stale = true;
+        this.log.warn(`[${entry.handle.uid}] 逾 ${this.livenessTimeoutMs}ms 無資料 → 標記離線`);
+        this.onLivenessLost(entry.handle);
+      }
+    }
+  }
+
   private async poll(): Promise<void> {
     if (!this.SerialPort) return;
+    this.checkLiveness();
     try {
       const ports = await this.SerialPort.list();
       const seen = new Set(ports.map((p) => p.path));
@@ -184,14 +218,21 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       return;
     }
 
-    const entry: OpenEntry = { port, framer, handle, identified: false, closing: false };
+    const entry: OpenEntry = { port, framer, handle, identified: false, closing: false, lastDataAt: Date.now(), stale: false };
     this.open.set(info.path, entry);
 
     port.on("open", () => {
       this.retry.clear(info.path);
+      entry.lastDataAt = Date.now(); // 重置寬限期，避免剛開埠就被 liveness 誤判斷流
       this.onOpen(handle);
     });
     port.on("data", (chunk: Buffer) => {
+      entry.lastDataAt = Date.now();
+      if (entry.stale) {
+        entry.stale = false;
+        this.log.info(`[${uid}] 資料恢復 → 重新上線`);
+        this.onLivenessRestored(handle);
+      }
       const text = chunk.toString("latin1"); // 條碼／秤資料多為 ASCII/拉丁，避免多位元組誤切
       for (const line of framer.push(text)) this.handleLine(line, handle);
     });

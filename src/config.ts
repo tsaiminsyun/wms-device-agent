@@ -51,6 +51,9 @@ export const ConfigSchema = z.object({
       baudRate: z.number().int().positive().default(9600),
       path: z.string().nullable().default(null),
       keyboardFallback: z.boolean().default(true),
+      // 抑制「連續重複讀同一條碼」：同一條碼在此毫秒數內重複出現視為 presentation/連續模式重掃，
+      // 只送第一筆、其餘略過，直到出現空檔或不同條碼。設 0 關閉。
+      dedupWindowMs: z.number().int().min(0).default(1500),
     })
     .default({}),
   // HID 掃碼槍（HID-POS / IBM / SNAPI 模式，走 node-hid）。與 CDC 的 scanner 可同時啟用，互不衝突。
@@ -62,6 +65,8 @@ export const ConfigSchema = z.object({
       vendorIds: z.array(VendorIdSchema).default(["05e0"]),
       usagePages: z.array(UsagePageSchema).default([]),
       reportHeaderBytes: z.number().int().min(0).max(64).default(4),
+      // 同 scanner.dedupWindowMs：抑制連續重複讀同一條碼（presentation/連續模式）。設 0 關閉。
+      dedupWindowMs: z.number().int().min(0).default(1500),
     })
     .default({}),
   scale: z
