@@ -28,11 +28,13 @@ PKG_NAME="$("$NODE_BIN" -p "require('./package.json').name")"
 PKG_VERSION="$("$NODE_BIN" -p "require('./package.json').version")"
 
 BUILD="$ROOT/build"
-DIST="$ROOT/dist-win"
+DIST_ROOT="$ROOT/dist-win"
+PKG_DIR="${PKG_NAME}-${PKG_VERSION}-win-x64"   # 解壓後的單一頂層資料夾名
+DIST="$DIST_ROOT/$PKG_DIR"                      # 所有檔案組裝進此資料夾（zip 內即以此為頂層）
 CACHE="$ROOT/packaging/.cache"
 WIN_DIR="$ROOT/packaging/windows"
 
-rm -rf "$BUILD" "$DIST"
+rm -rf "$BUILD" "$DIST_ROOT"
 mkdir -p "$BUILD" "$DIST" "$CACHE"
 
 echo "==> [1/6] esbuild：bundle app → build/agent.cjs（Node ${NODE_VERSION}）"
@@ -101,12 +103,14 @@ cp "$WIN_DIR/start-agent.bat" "$WIN_DIR/install-autostart.bat" \
    "$WIN_DIR/uninstall-autostart.bat" "$WIN_DIR/update-agent.bat" \
    "$WIN_DIR/run-hidden.vbs" "$WIN_DIR/README-WINDOWS.md" "$DIST/"
 
-OUT_ZIP="$ROOT/${PKG_NAME}-${PKG_VERSION}-win-x64.zip"
+OUT_ZIP="$ROOT/${PKG_DIR}.zip"
 rm -f "${OUT_ZIP}"
-(cd "$DIST" && zip -qr "${OUT_ZIP}" .)
+# 從 dist-win 打包整個 $PKG_DIR 資料夾 → 壓縮檔內含「單一頂層資料夾」，
+# 使用者解壓即得一個資料夾（不會把檔案散落在桌面／下載夾）。
+(cd "$DIST_ROOT" && zip -qr "${OUT_ZIP}" "$PKG_DIR")
 
 echo ""
 echo "完成："
 echo "  資料夾：${DIST}"
-echo "  壓縮檔：${OUT_ZIP}（$(du -h "${OUT_ZIP}" | cut -f1 | tr -d ' ')）"
+echo "  壓縮檔：${OUT_ZIP}（$(du -h "${OUT_ZIP}" | cut -f1 | tr -d ' ')；解壓為單一資料夾 ${PKG_DIR}/）"
 echo "  exe   ：$(du -h "$DIST/wms-device-agent.exe" | cut -f1 | tr -d ' ')（Node ${NODE_VERSION} win-x64 + app bundle）"

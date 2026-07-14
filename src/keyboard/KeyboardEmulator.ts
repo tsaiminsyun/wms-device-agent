@@ -26,6 +26,7 @@ const SUPPORTED_PLATFORMS = new Set(["win32", "darwin", "linux"]);
 export class KeyboardEmulator {
   private mod: NutModule | null | undefined; // undefined=未嘗試載入, null=載入失敗
   private warned = false;
+  private macHintShown = false;
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -79,6 +80,14 @@ export class KeyboardEmulator {
   private async doType(text: string): Promise<void> {
     const mod = await this.load();
     if (!mod) return;
+    // macOS 首次實際打字時提示：nut.js 需要「輔助使用 (Accessibility)」權限，否則會印警告且打不出字。
+    if (process.platform === "darwin" && !this.macHintShown) {
+      this.macHintShown = true;
+      this.log.warn(
+        "macOS 鍵盤模擬需「輔助使用 (Accessibility)」權限：系統設定 → 隱私權與安全性 → 輔助使用，" +
+          "把執行本程式的終端機／Node 打勾。開發環境若不需鍵盤退路，設環境變數 KEYBOARD_ENABLED=0 即可停用（本警告與 nut.js 警告皆會消失）。",
+      );
+    }
     await mod.keyboard.type(text);
     if (this.opts.pressEnter) {
       await mod.keyboard.pressKey(mod.Key.Enter);

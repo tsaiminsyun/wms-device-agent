@@ -1,6 +1,7 @@
 # wms-device-agent — Windows 部署說明
 
 本資料夾是打包好的獨立版本：**不需要安裝 Node.js**，解壓即可執行。
+解壓 zip 後會得到**單一資料夾**（`wms-device-agent-<版本>-win-x64`），所有檔案都在裡面（不會散落在桌面）。
 
 ## 內容物
 
