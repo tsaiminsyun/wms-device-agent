@@ -17,6 +17,8 @@ const NEUTRAL_NAME = "序列裝置（待辨識）";
 // 桌秤會持續串流讀數；逾此毫秒數無任何序列資料即視為離線（關機／拔線／線路異常）。
 // 取值需大於秤的串流間隔又能及時反映；監看以 serial.pollIntervalMs 為節奏檢查。
 const SCALE_LIVENESS_TIMEOUT_MS = 4000;
+// 斷流更久（此毫秒數）則主動關閉並重開序列埠（軟體版重插），救回卡死的埠而不必手動拔插。
+const SCALE_LIVENESS_RECOVERY_MS = 15_000;
 
 interface LastEmit {
   kg: number;
@@ -29,6 +31,8 @@ export class ScaleDriver extends SerialDeviceDriver {
   protected readonly displayName = "電子秤";
   // 啟用斷流監看：秤關機但 USB-serial 晶片仍在（埠不會消失）時，靠此把狀態改為離線（紅）。
   protected override readonly livenessTimeoutMs = SCALE_LIVENESS_TIMEOUT_MS;
+  // 啟用斷流自動重連：長時間無資料時關閉並重開埠，救回卡死的序列控制代碼（免手動拔插）。
+  protected override readonly livenessRecoveryMs = SCALE_LIVENESS_RECOVERY_MS;
 
   // 每個 uid 的最後送出值（去重用）。
   private readonly lastEmit = new Map<string, LastEmit>();

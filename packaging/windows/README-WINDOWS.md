@@ -58,7 +58,8 @@ Windows 服務（session 0）打不進使用者的視窗。若不需要鍵盤退
 
 | 症狀 | 解法 |
 |---|---|
-| 啟動後馬上結束 | 看 `agent.log`：多半是 `config.json` 格式錯誤（訊息會列出欄位）或 8788 埠被占用。 |
+| 啟動後馬上結束 | 看 `agent.log`：多半是 `config.json` 格式錯誤（訊息會列出欄位）。8788 埠被占用時會自動重試並「接管」殘留的舊實例（強制結束仍占用埠的另一個 `wms-device-agent.exe`），無需手動處理。 |
+| 重啟後埠一直被占用 | 新版已在啟動時自動結束殘留的舊實例並接手（連同其卡住的序列埠一併釋放）。若仍發生，代表占用者不是本程式——`agent.log` 會指出占用埠的 PID。 |
 | log 出現「無法載入 serialport / node-hid / nut.js」 | `node_modules` 沒跟著 exe 一起搬，或被防毒隔離。整個資料夾重新解壓。 |
 | 掃碼槍/電子秤沒反應 | 見專案 README 的「掃碼槍」「電子秤」「疑難排解」章節（模式設定、VID、`Cannot lock port`）。 |
 | 無認領時掃碼沒打字 | 確認程式是以登入使用者身分執行（不是服務/SYSTEM）；`config.json` 的 `keyboard.enabled` 為 `true`。 |

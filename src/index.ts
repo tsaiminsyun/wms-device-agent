@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import type { Server as HttpServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { createLogger, setLogLevel, type Logger } from "./logger.js";
+import { freePortIfOwnedByUs } from "./runtime/freePort.js";
 import { DeviceBus } from "./core/DeviceBus.js";
 import { DeviceManager } from "./core/DeviceManager.js";
 import { PortRegistry } from "./devices/serial/SerialDeviceDriver.js";
@@ -36,11 +37,16 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// 監聽埠並容忍「舊實例尚未釋放埠」：EADDRINUSE 時短暫重試，讓剛關閉的舊實例把埠放掉再綁上；
-// 逾重試上限仍占用才放棄，並給出可操作的錯誤訊息。
+// 監聽埠並容忍「舊實例尚未釋放埠」：
+//   1) EADDRINUSE 時先短暫重試，讓正常關閉中的舊實例把埠放掉再綁上；
+//   2) 重試若干次仍占用，嘗試「接管」——若占用者確實是我們自己的另一個實例（常見：收不到關閉訊號
+//      的孤兒程序），強制結束它以釋放埠與其卡住的序列埠，再繼續重試；
+//   3) 逾重試上限仍占用（且非本程式占用）才放棄，並給出可操作的錯誤訊息。
 async function listenWithRetry(server: HttpServer, port: number, host: string, log: Logger): Promise<void> {
-  const MAX_ATTEMPTS = 8;
+  const MAX_ATTEMPTS = 10;
   const RETRY_DELAY_MS = 1000;
+  const TAKEOVER_AT_ATTEMPT = 3; // 先給正常關閉幾秒緩衝，仍占用才動用接管
+  let tookOver = false;
   for (let attempt = 1; ; attempt++) {
     try {
       await new Promise<void>((resolve, reject) => {
@@ -60,6 +66,14 @@ async function listenWithRetry(server: HttpServer, port: number, host: string, l
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err.code !== "EADDRINUSE") throw err;
+      // 一次性接管：占用者若是我們自己的殘留實例就結束它（釋放埠與其占住的序列埠）。
+      if (attempt >= TAKEOVER_AT_ATTEMPT && !tookOver) {
+        tookOver = true;
+        if (await freePortIfOwnedByUs(port, log)) {
+          await delay(RETRY_DELAY_MS); // 給 OS 一點時間回收
+          continue;
+        }
+      }
       if (attempt < MAX_ATTEMPTS) {
         log.warn(`埠 ${host}:${port} 被占用（可能舊實例尚未釋放），${RETRY_DELAY_MS}ms 後重試（${attempt}/${MAX_ATTEMPTS}）…`);
         await delay(RETRY_DELAY_MS);

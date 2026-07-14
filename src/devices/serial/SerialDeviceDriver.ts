@@ -20,6 +20,9 @@ import {
   type SerialPortInstance,
 } from "./serialLoader.js";
 
+// 斷流自動重連的最小間隔：即使裝置持續無資料，也至多每此毫秒數重開一次，避免洗 log／狀態閃爍。
+const REOPEN_MIN_INTERVAL_MS = 60_000;
+
 // 跨驅動共享：避免兩個驅動同時搶開同一個實體埠。
 export class PortRegistry {
   private readonly claimed = new Set<string>();
@@ -71,6 +74,8 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
 
   private readonly open = new Map<string, OpenEntry>(); // path → entry
   private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS);
+  // 斷流自動重連的節流：path → 上次觸發重連的時間，避免對「僅是關機」的裝置狂關狂開洗 log。
+  private readonly lastReopenAt = new Map<string, number>();
   private loop: PollLoop | null = null;
   private SerialPort: SerialPortCtor | null = null;
   private counter = 0;
@@ -101,6 +106,11 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   // 斷流監看：持續串流的裝置（電子秤）超過此毫秒數沒收到資料 → 視為離線（可能關機／線路異常）。
   // null＝停用（如掃碼槍平時不主動送資料，不適用）。子類別覆寫以啟用。
   protected readonly livenessTimeoutMs: number | null = null;
+
+  // 斷流自動重連：裝置持續無資料超過此毫秒數，主動關閉並重開序列埠（相當於「軟體版重插」），
+  // 以救回卡死的序列控制代碼（例如舊實例殘留、驅動狀態異常）而不必手動拔插。null＝停用。
+  // 節流至每 REOPEN_MIN_INTERVAL_MS 至多一次，避免對單純關機的裝置反覆開關。
+  protected readonly livenessRecoveryMs: number | null = null;
 
   // 子類別可覆寫：偵測到斷流（裝置就緒後停止送資料）時的狀態回報，預設標為 error（前端顯示紅燈）。
   protected onLivenessLost(h: SerialPortHandle): void {
@@ -144,19 +154,32 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     for (const path of paths) this.registry.release(path);
     this.open.clear();
     this.retry.reset();
+    this.lastReopenAt.clear();
   }
 
   // 斷流監看：已開啟且啟用 liveness 的裝置，超過 livenessTimeoutMs 沒收到資料 → 標為離線（紅燈）。
   // 埠仍在（USB-serial 晶片供電）故不會觸發拔除偵測；靠此補足「秤關機但線還插著」的情境。
+  // 若再啟用 livenessRecoveryMs，斷流更久則主動關閉並重開該埠（軟體版重插）救回卡死的控制代碼。
   private checkLiveness(): void {
     if (this.livenessTimeoutMs == null) return;
     const now = Date.now();
-    for (const entry of this.open.values()) {
-      if (entry.closing || entry.stale) continue;
-      if (now - entry.lastDataAt > this.livenessTimeoutMs) {
+    for (const [path, entry] of this.open) {
+      if (entry.closing) continue;
+      const idleMs = now - entry.lastDataAt;
+      if (!entry.stale && idleMs > this.livenessTimeoutMs) {
         entry.stale = true;
         this.log.warn(`[${entry.handle.uid}] 逾 ${this.livenessTimeoutMs}ms 無資料 → 標記離線`);
         this.onLivenessLost(entry.handle);
+      }
+      // 斷流過久 → 軟體重插（關閉後由輪詢重開）。節流避免對單純關機的裝置反覆開關。
+      if (this.livenessRecoveryMs != null && idleMs > this.livenessRecoveryMs) {
+        const lastReopen = this.lastReopenAt.get(path) ?? 0;
+        if (now - lastReopen >= REOPEN_MIN_INTERVAL_MS) {
+          this.lastReopenAt.set(path, now);
+          this.log.info(`[${entry.handle.uid}] 斷流逾 ${this.livenessRecoveryMs}ms → 自動重連（關閉後重開 ${path}）`);
+          this.detach(path, entry, "斷流自動重連");
+          this.retry.clear(path); // 讓下一輪輪詢立即重開，不受開啟失敗冷卻影響
+        }
       }
     }
   }
@@ -173,6 +196,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         if (!seen.has(path)) this.detach(path, entry, "拔除");
       }
       this.retry.prune(seen);
+      for (const path of this.lastReopenAt.keys()) if (!seen.has(path)) this.lastReopenAt.delete(path);
 
       // 偵測新增：符合條件、尚未開啟、未被其他驅動占用、且不在重試冷卻中。
       for (const info of ports) {
