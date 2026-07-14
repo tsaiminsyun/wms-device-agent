@@ -107,6 +107,14 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   // null＝停用（如掃碼槍平時不主動送資料，不適用）。子類別覆寫以啟用。
   protected readonly livenessTimeoutMs: number | null = null;
 
+  // serialport 的 hupcl 選項（預設 true）。語意依平台不同：
+  //   - Unix：true＝關埠時把 DTR 拉低（HUPCL）；false＝關埠不動 DTR。
+  //   - Windows：true＝開埠時拉高 DTR（DTR_CONTROL_ENABLE）；false＝完全不拉 DTR（DISABLE）。
+  // 共同點：設 false 後，程式開關埠「不會產生 DTR 高→低邊緣」。
+  // 部分電子秤把 DTR 落下邊緣當成休眠指令、且要重新上電（拔插 USB）才醒——這正是
+  // 「重啟程式後秤失聯、必須拔插」的元兇。這類裝置的子類別應覆寫為 false。
+  protected readonly hupcl: boolean = true;
+
   // 斷流自動重連：裝置持續無資料超過此毫秒數，主動關閉並重開序列埠（相當於「軟體版重插」），
   // 以救回卡死的序列控制代碼（例如舊實例殘留、驅動狀態異常）而不必手動拔插。null＝停用。
   // 節流至每 REOPEN_MIN_INTERVAL_MS 至多一次，避免對單純關機的裝置反覆開關。
@@ -233,7 +241,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
 
     let port: SerialPortInstance;
     try {
-      port = new this.SerialPort({ path: info.path, baudRate: this.options.baudRate, autoOpen: true });
+      port = new this.SerialPort({ path: info.path, baudRate: this.options.baudRate, autoOpen: true, hupcl: this.hupcl });
     } catch (err) {
       this.log.error(`開啟 ${info.path} 失敗：`, err);
       this.registry.release(info.path);

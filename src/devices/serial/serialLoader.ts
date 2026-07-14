@@ -28,7 +28,8 @@ export interface SerialPortInstance {
 }
 
 export interface SerialPortCtor {
-  new (opts: { path: string; baudRate: number; autoOpen?: boolean }): SerialPortInstance;
+  // hupcl：Unix＝關埠時是否拉低 DTR；Windows＝開埠時是否拉高 DTR（DTR_CONTROL_ENABLE/DISABLE）。
+  new (opts: { path: string; baudRate: number; autoOpen?: boolean; hupcl?: boolean }): SerialPortInstance;
   list(): Promise<SerialPortInfo[]>;
 }
 

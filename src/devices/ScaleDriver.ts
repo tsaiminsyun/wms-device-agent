@@ -33,6 +33,10 @@ export class ScaleDriver extends SerialDeviceDriver {
   protected override readonly livenessTimeoutMs = SCALE_LIVENESS_TIMEOUT_MS;
   // 啟用斷流自動重連：長時間無資料時關閉並重開埠，救回卡死的序列控制代碼（免手動拔插）。
   protected override readonly livenessRecoveryMs = SCALE_LIVENESS_RECOVERY_MS;
+  // hupcl=false：確保程式開關埠不產生 DTR 高→低邊緣（Windows 預設會在開埠拉高、關埠落下）。
+  // 本秤把 DTR 落下邊緣當成休眠且要重新上電才醒——這正是「Windows 重啟 exe 後秤失聯、
+  // 必須拔插 USB」的元兇；macOS 開發時不拉 DTR 故無此問題。秤不需要 DTR 也會正常送資料。
+  protected override readonly hupcl = false;
 
   // 每個 uid 的最後送出值（去重用）。
   private readonly lastEmit = new Map<string, LastEmit>();
