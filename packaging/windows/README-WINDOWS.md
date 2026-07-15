@@ -8,21 +8,35 @@
 | 檔案 | 說明 |
 |---|---|
 | `wms-device-agent.exe` | 主程式（內含 Node.js 執行環境與應用程式碼） |
-| `node_modules/` | 裝置原生模組（serialport / node-hid / nut.js），**必須與 exe 放同一層** |
+| `node_modules/` | 裝置原生模組（serialport / node-hid / nut.js）與工作列圖示 helper（systray2），**必須與 exe 放同一層** |
 | `config.json` | 設定檔（部署時修改，見下） |
-| `start-agent.bat` | 手動啟動（輸出寫入 `agent.log`） |
-| `install-autostart.bat` | 註冊「登入時自動啟動」並立即啟動 |
+| `start-agent.bat` | 手動啟動：開啟**狀態視窗**（顯示即時 log）＋系統匣圖示 |
+| `install-autostart.bat` | 註冊「登入時自動啟動」（無視窗，只有系統匣圖示）並立即啟動 |
 | `uninstall-autostart.bat` | 移除自動啟動並停止程式 |
 | `update-agent.bat` | 一鍵更新到新版（保留 `config.json`，見下方「更新版本」） |
-| `run-hidden.vbs` | 供排程工作以隱藏視窗啟動（不用手動執行） |
+| `run-agent.bat` / `run-hidden.vbs` | 內部（自動啟動）用，**不用手動執行** |
 
 ## 快速開始
 
 1. 把整個資料夾複製到固定位置（例 `C:\wms-device-agent\`）。**不要只複製 exe**——`node_modules` 與 `config.json` 必須跟著。
 2. 編輯 `config.json`：把正式 WMS 網址加進 `security.allowedOrigins`。
-3. 雙擊 `start-agent.bat` 啟動（或直接雙擊 exe；用 bat 會留下 `agent.log` 方便排錯）。
+3. 雙擊 `wms-device-agent.exe`（或 `start-agent.bat`）啟動——會開一個**狀態視窗**顯示即時 log，
+   同時在右下角**系統匣**出現**橘色包裹圖示**。
 4. 瀏覽器開 `http://127.0.0.1:8788/health`，看到 `{"status":"ok",...}` 即成功。
-5. 要開機（登入）自動啟動：雙擊 `install-autostart.bat`。
+5. 要開機（登入）自動啟動：雙擊 `install-autostart.bat`（開機自動啟動時不開視窗，只有系統匣圖示）。
+
+> **按 X 不會關掉程式**：狀態視窗右上角的 X 只會關掉「視窗」——程式本體繼續在背景執行，
+> 圖示縮到系統匣（看不到就按「^」展開隱藏的圖示）。
+>
+> **系統匣選單**：在包裹圖示上按右鍵——
+> 「**檢視 Log (View Logs)**」會把**啟動時那個狀態視窗**還原並帶到最前面（即使被最小化或被其他視窗蓋住），
+> **不會另開新視窗**；只有在該視窗已被 X 關掉（或開機自動啟動未開視窗）時，才會開一個新的狀態視窗。
+> 「**結束程式 (Exit)**」會**完全結束**（關閉狀態視窗、背景實例與工作列 helper 等所有相關程序）並釋放序列埠，
+> 下次啟動即自動重新偵測掃碼槍與電子秤，無需任何手動復原。
+> 結束時會**清除本次的 log 檔**（`agent.log` 等）；若某個檔仍被占用而當下刪不掉，下次啟動前也會再清一次，
+> 因此每次重新啟動都是乾淨的 log。
+>
+> （進階：設環境變數 `WMS_NO_DETACH=1` 可停用「視窗／背景分離」，回到傳統單行程行為。）
 
 > **SmartScreen 提示**：exe 未簽章（由官方 node.exe 注入程式產生），首次執行 Windows 可能跳出
 > 「Windows 已保護您的電腦」——點「其他資訊」→「仍要執行」。
@@ -38,8 +52,9 @@ Windows 服務（session 0）打不進使用者的視窗。若不需要鍵盤退
 
 | 動作 | 方式 |
 |---|---|
-| 手動啟動 | 雙擊 `start-agent.bat` |
-| 停止 | 工作管理員結束 `wms-device-agent.exe`，或 `taskkill /IM wms-device-agent.exe /F` |
+| 手動啟動／看狀態 | 雙擊 `wms-device-agent.exe`（已在執行時只會再開一個狀態視窗，不會重複啟動） |
+| 關閉狀態視窗 | 按視窗右上角 X（程式繼續在背景執行，系統匣圖示還在） |
+| 停止 | **系統匣圖示按右鍵 →「結束程式 (Exit)」**（正常關閉方式）。不得已才用工作管理員結束 `wms-device-agent.exe` |
 | 看 log | 開 `agent.log`（需要更多細節時把 `config.json` 的 `logLevel` 改成 `"debug"` 後重啟） |
 | 查裝置狀態 | 瀏覽器開 `http://127.0.0.1:8788/devices` |
 | 升級版本 | 用 `update-agent.bat`（見下方「更新版本」），不要手動覆蓋 |

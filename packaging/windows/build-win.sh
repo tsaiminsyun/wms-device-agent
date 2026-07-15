@@ -73,6 +73,8 @@ cp -R "$NATIVE/node_modules" "$DIST/node_modules"
 rm -rf "$DIST/node_modules/@nut-tree-fork/libnut-darwin" "$DIST/node_modules/@nut-tree-fork/libnut-linux"
 find "$DIST/node_modules/@serialport/bindings-cpp/prebuilds" -mindepth 1 -maxdepth 1 -type d ! -name "win32-x64" -exec rm -rf {} +
 find "$DIST/node_modules/node-hid/prebuilds" -mindepth 1 -maxdepth 1 -type d ! -name "*win32-x64*" -exec rm -rf {} +
+# systray2 的工作列 helper：只留 Windows 版。
+rm -f "$DIST/node_modules/systray2/traybin/tray_darwin_release" "$DIST/node_modules/systray2/traybin/tray_linux_release"
 
 # 驗證關鍵 Windows 原生二進位確實在包裡（缺了代表跨平台安裝失敗，直接中止）。
 check() {
@@ -84,11 +86,12 @@ check() {
 check "$DIST/node_modules/@serialport/bindings-cpp/prebuilds/win32-x64/*.node"
 check "$DIST/node_modules/node-hid/prebuilds/HID-win32-x64/*.node"
 check "$DIST/node_modules/@nut-tree-fork/libnut-win32/build/Release/*.node"
+check "$DIST/node_modules/systray2/traybin/tray_windows_release.exe"
 
 echo "==> [6/6] 組裝發佈資料夾與 zip"
 cp "$ROOT/config.example.json" "$DIST/config.json"
-cp "$WIN_DIR/start-agent.bat" "$WIN_DIR/install-autostart.bat" \
-   "$WIN_DIR/uninstall-autostart.bat" "$WIN_DIR/update-agent.bat" \
+cp "$WIN_DIR/start-agent.bat" "$WIN_DIR/run-agent.bat" \
+   "$WIN_DIR/install-autostart.bat" "$WIN_DIR/uninstall-autostart.bat" "$WIN_DIR/update-agent.bat" \
    "$WIN_DIR/run-hidden.vbs" "$WIN_DIR/README-WINDOWS.md" "$DIST/"
 
 OUT_ZIP="$ROOT/${PKG_DIR}.zip"
