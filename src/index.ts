@@ -97,7 +97,6 @@ async function main(): Promise<void> {
         { baudRate: config.scanner.baudRate, forcedPath: config.scanner.path, pollIntervalMs: config.serial.pollIntervalMs },
         config.scanner.vendorIds,
         config.scanner.dedupWindowMs,
-        config.scanner.ignoreFirstScans,
       ),
     );
   }
@@ -120,7 +119,6 @@ async function main(): Promise<void> {
         usagePages: config.hidScanner.usagePages,
         reportHeaderBytes: config.hidScanner.reportHeaderBytes,
         dedupWindowMs: config.hidScanner.dedupWindowMs,
-        ignoreFirstScans: config.hidScanner.ignoreFirstScans,
         pollIntervalMs: config.serial.pollIntervalMs,
       }),
     );
@@ -130,6 +128,7 @@ async function main(): Promise<void> {
   const keyboard = new KeyboardEmulator(log, {
     enabled: config.keyboard.enabled,
     pressEnter: config.keyboard.pressEnter,
+    paste: config.keyboard.paste,
   });
   // 啟動即預熱 nut.js（背景、不阻塞啟動），讓第一筆掃碼不必現場等載入初始化。
   keyboard.warmUp();

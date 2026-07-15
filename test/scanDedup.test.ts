@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { ScanDebouncer, ScanEmitter } from "../src/devices/scanDedup";
+import { describe, it, expect } from "vitest";
+import { ScanDebouncer } from "../src/devices/scanDedup";
 
 describe("ScanDebouncer", () => {
   it("連續重讀同一條碼：只放行第一筆", () => {
@@ -67,66 +67,5 @@ describe("ScanDebouncer", () => {
     d.forget("s");
     t = 200;
     expect(d.accept("s", "A")).toBe(true);
-  });
-});
-
-describe("ScanEmitter 忽略連線後首筆自動觸發（計數式，不受時間影響）", () => {
-  function make(ignoreFirstScans: number, dedupMs = 0) {
-    let t = 0;
-    const emitted: string[] = [];
-    const bus = { emit: (_e: string, p: { barcode: string }) => emitted.push(p.barcode) } as never;
-    const log = { info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () => log } as never;
-    const em = new ScanEmitter(bus, log, "掃碼槍", dedupMs, ignoreFirstScans, () => t);
-    return { em, emitted, at: (ms: number) => (t = ms) };
-  }
-
-  it("連線後首筆（自動觸發）被忽略，之後照常", () => {
-    const { em, emitted } = make(1);
-    em.armIgnoreFirst("s");
-    em.emit("s", "MOTEVTTC110"); // 連線後第一筆 → 忽略
-    expect(emitted).toEqual([]);
-    em.emit("s", "REAL-1");
-    em.emit("s", "REAL-2");
-    expect(emitted).toEqual(["REAL-1", "REAL-2"]);
-  });
-
-  it("不受時間影響：即使首筆延遲很久（Windows 卡住迴圈）仍被忽略", () => {
-    const { em, emitted, at } = make(1);
-    em.armIgnoreFirst("s");
-    at(60_000); // 原生模組載入卡住 60 秒後才處理到自動觸發那筆
-    em.emit("s", "MOTEVTTC110"); // 計數式 → 照樣忽略（時間窗式會失準放行）
-    expect(emitted).toEqual([]);
-  });
-
-  it("只守首筆：第二筆立刻放行", () => {
-    const { em, emitted } = make(1);
-    em.armIgnoreFirst("s");
-    em.emit("s", "AUTO"); // 忽略
-    em.emit("s", "REAL"); // 放行
-    expect(emitted).toEqual(["REAL"]);
-  });
-
-  it("可設定忽略前 N 筆", () => {
-    const { em, emitted } = make(2);
-    em.armIgnoreFirst("s");
-    em.emit("s", "AUTO1");
-    em.emit("s", "AUTO2");
-    em.emit("s", "REAL");
-    expect(emitted).toEqual(["REAL"]);
-  });
-
-  it("ignoreFirstScans=0 關閉：首筆照常放行", () => {
-    const { em, emitted } = make(0);
-    em.armIgnoreFirst("s");
-    em.emit("s", "AUTO");
-    expect(emitted).toEqual(["AUTO"]);
-  });
-
-  it("forget 清掉首筆過濾狀態", () => {
-    const { em, emitted } = make(1);
-    em.armIgnoreFirst("s");
-    em.forget("s");
-    em.emit("s", "X"); // 已 forget → 不再守首筆
-    expect(emitted).toEqual(["X"]);
   });
 });

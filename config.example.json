@@ -27,17 +27,15 @@
     "baudRate": 9600,
     "path": null,
     "keyboardFallback": true,
-    "dedupWindowMs": 1500,
-    "ignoreFirstScans": 1
+    "dedupWindowMs": 1500
   },
   "hidScanner": {
-    "$comment": "HID-POS/IBM 掃碼槍（node-hid）。usagePages 空=不過濾；reportHeaderBytes 依機型校準；dedupWindowMs=連續重讀抑制窗（0=關閉）；ignoreFirstScans=連線後忽略前幾筆自動觸發〔如 MOTEVTTC110〕，預設 1（0=關閉）。",
+    "$comment": "HID-POS/IBM 掃碼槍（node-hid）。usagePages 空=不過濾；reportHeaderBytes 依機型校準；dedupWindowMs=連續重讀抑制窗（0=關閉）。",
     "enabled": true,
     "vendorIds": ["05e0"],
     "usagePages": [],
     "reportHeaderBytes": 4,
-    "dedupWindowMs": 1500,
-    "ignoreFirstScans": 1
+    "dedupWindowMs": 1500
   },
   "scale": {
     "enabled": true,
@@ -49,8 +47,10 @@
     "pollIntervalMs": 2000
   },
   "keyboard": {
+    "$comment": "無焦點認領時的離線鍵盤退路。paste=true 以剪貼簿整串貼上（快、不掉字）；設 false 改逐字輸入。pressEnter=貼上/輸入後補一個 Enter。",
     "enabled": true,
-    "pressEnter": true
+    "pressEnter": true,
+    "paste": true
   },
   "logLevel": "info"
 }

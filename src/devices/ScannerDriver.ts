@@ -21,20 +21,13 @@ export class ScannerDriver extends SerialDeviceDriver {
     options: SerialDriverOptions,
     private readonly vendorIds: readonly string[],
     dedupWindowMs: number,
-    ignoreFirstScans: number,
   ) {
     super(bus, log, registry, options);
-    this.scan = new ScanEmitter(bus, this.log, this.displayName, dedupWindowMs, ignoreFirstScans);
+    this.scan = new ScanEmitter(bus, this.log, this.displayName, dedupWindowMs);
   }
 
   protected selectPort(_info: SerialPortInfo, vid: string | null): boolean {
     return vid !== null && this.vendorIds.includes(vid);
-  }
-
-  // 埠開啟即武裝「忽略連線後首筆」：CDC 掃碼槍連線時若自動送出一筆，視為自動觸發忽略。
-  protected override onOpen(h: SerialPortHandle): void {
-    super.onOpen(h);
-    this.scan.armIgnoreFirst(h.uid);
   }
 
   protected handleLine(line: string, h: SerialPortHandle): void {
