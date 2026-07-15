@@ -29,6 +29,12 @@ const UsagePageSchema = z.union([z.number().int().nonnegative(), z.string()]).tr
 // 掃碼去重窗（毫秒）：窗內同一條碼只送第一筆；0=關閉。
 const DedupWindowMsSchema = z.number().int().min(0).default(1500);
 
+// 連線後要忽略的自動觸發掃碼筆數：有些掃碼槍一接上就自動送出一筆（型號/自我測試字串，
+// 如 MOTEVTTC110），此時尚未有人操作，須忽略以免誤輸入。採「計數」而非時間窗——
+// 打包到 Windows 後原生模組載入可能卡住事件迴圈數秒，時間窗會失準；計數式與開發環境一致。
+// 預設 1（忽略連線後第一筆）；0=關閉。掃碼槍每次連線只自動送一筆，故一般設 1 即可。
+const IgnoreFirstScansSchema = z.number().int().min(0).default(1);
+
 // 每個子物件都加 .default({})：整段缺席時仍套用各欄位預設，而非報 Required。
 export const ConfigSchema = z.object({
   server: z
@@ -52,6 +58,7 @@ export const ConfigSchema = z.object({
       path: z.string().nullable().default(null),
       keyboardFallback: z.boolean().default(true),
       dedupWindowMs: DedupWindowMsSchema,
+      ignoreFirstScans: IgnoreFirstScansSchema,
     })
     .default({}),
   // HID 掃碼槍（HID-POS/IBM，node-hid）；usagePages 空陣列＝接受任何非鍵盤/滑鼠 collection。
@@ -62,6 +69,7 @@ export const ConfigSchema = z.object({
       usagePages: z.array(UsagePageSchema).default([]),
       reportHeaderBytes: z.number().int().min(0).max(64).default(4),
       dedupWindowMs: DedupWindowMsSchema,
+      ignoreFirstScans: IgnoreFirstScansSchema,
     })
     .default({}),
   scale: z

@@ -18,6 +18,8 @@ export interface HidScannerOptions {
   reportHeaderBytes: number;
   /** 連續重讀同一條碼的抑制窗（毫秒）；0=關閉。 */
   dedupWindowMs: number;
+  /** 連線後要忽略的自動觸發掃碼筆數；0=關閉。 */
+  ignoreFirstScans: number;
   pollIntervalMs: number;
 }
 
@@ -46,7 +48,7 @@ export class HidScannerDriver implements DeviceDriver {
     private readonly opts: HidScannerOptions,
   ) {
     this.log = parentLog.child("HidScannerDriver");
-    this.scan = new ScanEmitter(bus, this.log, this.displayName, opts.dedupWindowMs);
+    this.scan = new ScanEmitter(bus, this.log, this.displayName, opts.dedupWindowMs, opts.ignoreFirstScans);
   }
 
   async start(): Promise<void> {
@@ -147,6 +149,7 @@ export class HidScannerDriver implements DeviceDriver {
     const entry: OpenEntry = { uid, device };
     this.open.set(path, entry);
     this.retry.clear(path);
+    this.scan.armIgnoreFirst(uid); // 連線後首筆自動觸發（自我字串）忽略，避免誤輸入
 
     const idText = `${hex4(info.vendorId)}:${hex4(info.productId)}`;
     const up = typeof info.usagePage === "number" ? `0x${info.usagePage.toString(16)}` : "?";

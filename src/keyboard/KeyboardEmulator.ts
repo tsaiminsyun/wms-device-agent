@@ -22,6 +22,7 @@ export class KeyboardEmulator {
   private mod: NutModule | null | undefined; // undefined=未嘗試載入, null=載入失敗
   private warned = false;
   private macHintShown = false;
+  private primed = false;
   private queue: Promise<void> = Promise.resolve();
 
   constructor(
@@ -31,6 +32,30 @@ export class KeyboardEmulator {
 
   get enabled(): boolean {
     return this.opts.enabled;
+  }
+
+  /**
+   * 啟動時預熱（非同步、不阻塞）：預先載入 nut.js 原生模組並初始化打字提供者，
+   * 讓第一筆掃碼不必現場等載入＋初始化（原本要數秒）。透過同一條佇列排入，
+   */
+  warmUp(): void {
+    if (!this.opts.enabled || this.primed) return;
+    this.queue = this.queue.then(() => this.prime()).catch(() => {});
+  }
+
+  private async prime(): Promise<void> {
+    if (this.primed) return;
+    const mod = await this.load();
+    if (!mod) return;
+    try {
+      // 消除「第一筆掃碼」的首次打字延遲。
+      await mod.keyboard.type("");
+      this.primed = true;
+      this.log.info("鍵盤模擬已預熱，第一筆掃碼可即時輸入。");
+    } catch (err) {
+      // 預熱失敗不致命：之後第一筆掃碼會照常觸發載入（只是少了預熱的即時性）。
+      this.log.debug("鍵盤模擬預熱失敗（不影響後續）：", err);
+    }
   }
 
   private async load(): Promise<NutModule | null> {
