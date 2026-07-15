@@ -149,73 +149,19 @@ export async function killRelatedProcesses(log: Logger): Promise<void> {
   await run(["/F", "/IM", "tray_windows_release.exe"]);
 }
 
-// 用 user32 依標題找出「可見的」既有狀態視窗，還原並帶到前景。
-// 只找 IsWindowVisible 的視窗（排除背景工作實例的隱藏主控台），確保比對到的是真正的狀態視窗。
-// 前景搶奪受 Windows 前景鎖限制：SetForegroundWindow 失敗時用「最小化→還原」把視窗逼到最前面。
-// 只有真的找到並嘗試還原才印出 FOUND；否則 NOTFOUND（呼叫端據此決定是否另開新視窗）。
-const RESTORE_PS = `
-$ErrorActionPreference='SilentlyContinue';
-Add-Type @"
-using System;using System.Text;using System.Runtime.InteropServices;
-public class W {
-  public delegate bool EnumProc(IntPtr h, IntPtr l);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
-  [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
-  public static IntPtr Find(string t){
-    IntPtr found=IntPtr.Zero;
-    EnumWindows((h,l)=>{
-      if(!IsWindowVisible(h)) return true;
-      var sb=new StringBuilder(512); GetWindowText(h,sb,512);
-      if(sb.Length>0 && sb.ToString().Contains(t)){ found=h; return false; }
-      return true;
-    }, IntPtr.Zero);
-    return found;
-  }
-  public static bool Raise(IntPtr h){
-    ShowWindow(h,9);                 // SW_RESTORE：若最小化則還原
-    BringWindowToTop(h);
-    if(SetForegroundWindow(h)) return true;
-    ShowWindow(h,6); ShowWindow(h,9); // 最小化→還原：逼過前景鎖
-    return SetForegroundWindow(h);
-  }
-}
-"@;
-$h=[W]::Find('${STATUS_WINDOW_TITLE}');
-if($h -ne [IntPtr]::Zero){ [W]::Raise($h) | Out-Null; 'FOUND' } else { 'NOTFOUND' }
-`;
-
-async function restoreExistingWindow(log: Logger): Promise<boolean> {
-  try {
-    const { stdout } = await pexec(
-      "powershell",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-Command", RESTORE_PS],
-      { windowsHide: true, timeout: 6000 },
-    );
-    return stdout.includes("FOUND");
-  } catch (err) {
-    log.debug("還原既有狀態視窗失敗（改開新視窗）：", err);
-    return false;
-  }
-}
-
 /**
- * 工作列「檢視 Log」：優先把「應用程式啟動時就開著的那個狀態視窗」還原並帶到前景
- * （即使被最小化或被其他視窗蓋住），不另開新視窗。只有在確實找不到既有視窗時
- * （例如先前被 X 關掉、或開機自動啟動未開視窗）才開一個新的狀態視窗。
+ * 工作列「檢視 Log」：啟動一個新的 wms-device-agent.exe 實例當「狀態視窗」顯示即時 log。
+ * health 已通（背景實例仍在執行）→ 新實例不會再起背景工作實例，只會 tail 同一份 agent.log。
+ *
+ * 為何直接啟動 exe（而非用 PowerShell/user32 找回既有視窗還原）：
+ *   ．倉儲/企業機器常以群組原則（ExecutionPolicy／AppLocker）封鎖 PowerShell，
+ *     使「還原既有視窗」的做法時靈時不靈——點了像沒反應。
+ *   ．直接啟動 exe 是最單純、可預期、且不依賴 PowerShell 的做法：每次點都一定開得出視窗。
  * 只在 Windows 生效。
  */
 export async function showStatusWindow(log: Logger): Promise<void> {
   if (process.platform !== "win32") return;
-  if (await restoreExistingWindow(log)) {
-    log.info("檢視 Log：已將既有狀態視窗還原至前景。");
-    return;
-  }
-  log.info("檢視 Log：找不到既有狀態視窗，開啟新的狀態視窗。");
-  // 重新啟動一個 exe 實例當「狀態視窗」：health 已通 → 不會再起背景實例，只 tail 同一份 log。
+  log.info("檢視 Log：啟動狀態視窗（wms-device-agent.exe）。");
   // 清掉 WORKER／QUIET 旗標，確保新實例走「前台狀態視窗」分支並顯示視窗。
   const env = { ...process.env };
   delete env[WORKER_FLAG];
@@ -228,11 +174,14 @@ export async function showStatusWindow(log: Logger): Promise<void> {
     // 【關鍵】絕不能設 windowsHide:true——它會在 STARTUPINFO 帶入 SW_HIDE，
     // 經 cmd → start 傳染到新 exe 的主控台，使視窗「開了卻是隱藏的」（看起來像沒反應）。
     // 由 start 自行建立可見的新主控台；cmd 立即結束，背景工作實例沒有主控台故不會閃視窗。
-    spawn("cmd", ["/c", "start", "", process.execPath], {
+    const child = spawn("cmd", ["/c", "start", "", process.execPath], {
       cwd: dirname(process.execPath),
       stdio: "ignore",
       env,
-    }).unref();
+    });
+    // spawn 失敗是非同步事件（emit 'error'）；未處理會讓背景工作實例崩潰，故必須攔下。
+    child.on("error", (err) => log.warn("開啟狀態視窗失敗（spawn cmd/start）：", err));
+    child.unref();
   } catch (err) {
     log.warn("開啟狀態視窗失敗：", err);
   }

@@ -74,7 +74,7 @@ export class Tray {
 
     // 保留選單項目的物件參照：systray2 點擊事件回傳的 action.item 就是「同一個物件參照」
     // （internalIdMap 存的是原始物件），故以參照比對最穩，不受標題編碼往返影響。
-    const logsItem: SysTrayItem = { title: ITEM_LOGS, tooltip: "還原狀態視窗（顯示即時 log）", enabled: true };
+    const logsItem: SysTrayItem = { title: ITEM_LOGS, tooltip: "開啟狀態視窗（顯示即時 log）", enabled: true };
     const exitItem: SysTrayItem = { title: ITEM_EXIT, tooltip: "完全結束程式（含狀態視窗與背景程序）", enabled: true };
 
     let tray: SysTrayInstance;
@@ -126,8 +126,8 @@ export class Tray {
   }
 
   private openLogs(): void {
-    // 不另開新視窗：把應用程式啟動時就開著的狀態視窗（顯示即時 log）還原並帶到前景；
-    // 只有在找不到既有視窗時才會開一個新的（見 showStatusWindow）。
+    // 啟動一個狀態視窗（wms-device-agent.exe）顯示即時 log；背景實例仍在執行，
+    // 故新實例只會 tail 同一份 agent.log、不會重複啟動背景服務（見 showStatusWindow）。
     void showStatusWindow(this.log);
   }
 

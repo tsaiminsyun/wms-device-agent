@@ -31,7 +31,7 @@ vi.mock("../src/runtime/nativeRequire", () => ({
   isSeaBuild: () => false,
 }));
 
-// 「檢視 Log」委派給 detach 的 showStatusWindow（還原既有狀態視窗），這裡只驗證有無被呼叫。
+// 「檢視 Log」委派給 detach 的 showStatusWindow（啟動狀態視窗），這裡只驗證有無被呼叫。
 const showStatusWindowMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../src/runtime/detach", () => ({ showStatusWindow: showStatusWindowMock }));
 
@@ -86,7 +86,7 @@ describe("Tray (win32)", () => {
     expect(onExit).toHaveBeenCalledTimes(1);
   });
 
-  it("點 View Logs（以物件參照回傳）→ 還原既有狀態視窗，不結束程式", async () => {
+  it("點 View Logs（以物件參照回傳）→ 啟動狀態視窗，不結束程式", async () => {
     const onExit = vi.fn();
     new Tray(log, { version: "1", onExit }).start();
     await flush();

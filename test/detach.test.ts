@@ -7,7 +7,7 @@ vi.mock("../src/runtime/nativeRequire", () => ({
   nativeRequire: () => ({}),
 }));
 
-const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn() })));
+const spawnMock = vi.hoisted(() => vi.fn(() => ({ unref: vi.fn(), on: vi.fn() })));
 const execFileMock = vi.hoisted(() =>
   vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (e: unknown, o: unknown) => void) => cb(null, { stdout: "", stderr: "" })),
 );
@@ -134,22 +134,13 @@ describe("killRelatedProcesses", () => {
 describe("showStatusWindow", () => {
   const mkLog = () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), child() { return this; } } as never);
 
-  it("找到既有狀態視窗（powershell 回 FOUND）→ 還原前景，不另開新視窗", async () => {
-    execFileMock.mockImplementationOnce(
-      (_c: string, _a: string[], _o: unknown, cb: (e: unknown, o: unknown) => void) => cb(null, { stdout: "FOUND", stderr: "" }),
-    );
-    await showStatusWindow(mkLog());
-    // 有透過 powershell 找視窗
-    const psCall = execFileMock.mock.calls.find((c) => (c as unknown as [string])[0] === "powershell");
-    expect(psCall).toBeTruthy();
-    // 找到了就不 spawn 新視窗
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("找不到既有視窗（NOTFOUND）→ 以 cmd start 開新狀態視窗（清掉 WORKER 旗標）", async () => {
-    // 預設 execFile mock 回空字串（不含 FOUND）→ 視為找不到
+  it("直接以 cmd start 啟動 wms-device-agent.exe 當狀態視窗（清掉 WORKER 旗標，不依賴 PowerShell）", async () => {
     process.env.WMS_AGENT_WORKER = "1"; // 模擬本行程是背景工作實例
     await showStatusWindow(mkLog());
+    // 不再用 PowerShell 找回既有視窗（企業機器常封鎖 PowerShell）
+    const psCall = execFileMock.mock.calls.find((c) => (c as unknown as [string])[0] === "powershell");
+    expect(psCall).toBeFalsy();
+    // 一律啟動一個新的 exe 狀態視窗實例
     expect(spawnMock).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = spawnMock.mock.calls[0] as unknown as [string, string[], Record<string, unknown>];
     expect(cmd).toBe("cmd");
@@ -168,7 +159,7 @@ describe("showStatusWindow", () => {
   });
 
   it("開新狀態視窗時不可設 windowsHide（否則視窗會被隱藏）", async () => {
-    await showStatusWindow(mkLog()); // 預設 NOTFOUND → 走 fallback
+    await showStatusWindow(mkLog());
     const [, , opts] = spawnMock.mock.calls[0] as unknown as [string, string[], Record<string, unknown>];
     expect(opts.windowsHide).toBeUndefined();
     expect(opts.detached).toBeUndefined();

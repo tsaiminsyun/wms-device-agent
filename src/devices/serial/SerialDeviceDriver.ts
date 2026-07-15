@@ -18,6 +18,11 @@ import {
 // 斷流自動重連的最小間隔（節流）。
 const REOPEN_MIN_INTERVAL_MS = 60_000;
 
+// 關閉單一序列埠時等待原生 close() 回呼的上限。
+// Windows 上裝置已拔除或有未完成的 I/O 時，close() 的回呼可能永不觸發；逾時即放手，
+// 確保關閉流程不被單一卡住的埠拖死（行程結束時 OS 也會釋放控制代碼）。
+const CLOSE_TIMEOUT_MS = 800;
+
 // 跨驅動共享：避免兩個驅動同時搶開同一個實體埠。
 export class PortRegistry {
   private readonly claimed = new Set<string>();
@@ -132,23 +137,54 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.loop?.stop();
     this.loop = null;
     const entries = [...this.open.entries()];
-    await Promise.allSettled(
-      entries.map(
-        ([, e]) =>
-          new Promise<void>((res) => {
-            e.closing = true;
-            try {
-              e.port.close(() => res());
-            } catch {
-              res();
-            }
-          }),
-      ),
-    );
-    for (const [path] of entries) this.registry.release(path);
+    // 先清空登記，避免關閉過程中殘留事件回呼再次觸發 detach／重開。
     this.open.clear();
+    // 平行關閉所有埠並徹底釋放資源（含逾時保護），確保下次啟動能立即重開該 COM 埠。
+    await Promise.allSettled(entries.map(([path, e]) => this.closePort(path, e)));
     this.retry.reset();
     this.reopenThrottle.reset();
+  }
+
+  /** 關閉單一序列埠並釋放所有相關資源；含逾時保護，避免原生 close() 卡住拖住整個關閉流程。 */
+  private closePort(path: string, e: OpenEntry): Promise<void> {
+    e.closing = true;
+    // 先移除所有監聽器：關閉期間不再處理 data/open/error/close，避免殘留閉包與重入。
+    try {
+      e.port.removeAllListeners("data");
+      e.port.removeAllListeners("open");
+      e.port.removeAllListeners("error");
+      e.port.removeAllListeners("close");
+    } catch {
+      /* ignore */
+    }
+    e.framer.reset();
+    this.registry.release(path);
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      // 逾時保護：close() 回呼未如期觸發也放手，讓關閉流程繼續。
+      const timer = setTimeout(() => {
+        this.log.warn(`[${e.handle.uid}] 關閉 ${path} 逾時，放棄等待（控制代碼將於行程結束時由 OS 釋放）。`);
+        finish();
+      }, CLOSE_TIMEOUT_MS);
+      timer.unref?.();
+      // 不分 isOpen 一律呼叫 close()：正開啟中（autoOpen）時會擲錯（改由 catch 收尾）或排入關閉佇列，
+      // 都能保證原生控制代碼被關閉，不會有「已關但底層仍占用」的 COM 埠殘留。
+      try {
+        e.port.close((err) => {
+          if (err) this.log.debug(`[${e.handle.uid}] 關閉 ${path} 回報：`, err);
+          finish();
+        });
+      } catch (err) {
+        this.log.debug(`[${e.handle.uid}] 關閉 ${path} 例外：`, err);
+        finish();
+      }
+    });
   }
 
   // 斷流監看與自動重連（補足「裝置關機但埠還在」的情境）。
