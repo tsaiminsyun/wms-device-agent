@@ -19,7 +19,7 @@ PKG_VERSION="$("$NODE_BIN" -p "require('./package.json').version")"
 
 BUILD="$ROOT/build"
 DIST_ROOT="$ROOT/dist-win"
-PKG_DIR="${PKG_NAME}-${PKG_VERSION}-win-x64"   # 解壓後的單一頂層資料夾名
+PKG_DIR="${PKG_NAME}"   # 解壓後的單一頂層資料夾名
 DIST="$DIST_ROOT/$PKG_DIR"                      # 所有檔案組裝進此資料夾（zip 內即以此為頂層）
 CACHE="$ROOT/packaging/.cache"
 WIN_DIR="$ROOT/packaging/windows"
