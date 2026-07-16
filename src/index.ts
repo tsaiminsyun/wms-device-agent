@@ -1,4 +1,4 @@
-// wms-device-agent 進入點：載入設定 → 組裝裝置驅動 / WS / HTTP / 交警模式 → 啟動 → 優雅關閉。
+// 進入點：設定 → 組裝裝置驅動/WS/HTTP/交警模式 → 啟動 → 優雅關閉。
 
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
@@ -37,7 +37,7 @@ function readPackageMeta(): { name: string; version: string } {
   }
 }
 
-// 監聽埠：被占用時重試；占用者若是本程式的殘留實例則強制接管，逾重試上限才放棄。
+// 監聽埠：被占用時重試；占用者若是本程式殘留實例則強制接管，逾上限才放棄。
 async function listenWithRetry(server: HttpServer, port: number, host: string, log: Logger): Promise<void> {
   const MAX_ATTEMPTS = 10;
   const RETRY_DELAY_MS = 1000;
@@ -51,7 +51,7 @@ async function listenWithRetry(server: HttpServer, port: number, host: string, l
     } catch (e) {
       const err = e as NodeJS.ErrnoException;
       if (err.code !== "EADDRINUSE") throw err;
-      // 一次性接管：結束我們自己的殘留實例。
+      // 一次性接管：結束自己的殘留實例。
       if (attempt >= TAKEOVER_AT_ATTEMPT && !tookOver) {
         tookOver = true;
         if (await freePortIfOwnedByUs(port, log)) {
@@ -75,8 +75,7 @@ async function listenWithRetry(server: HttpServer, port: number, host: string, l
 async function main(): Promise<void> {
   const config = loadConfig();
 
-  // Windows 打包版分流：本行程可能只是「前台狀態視窗」（顯示 log），
-  // 代理本體在另一個脫離主控台的背景實例執行（見 runtime/detach.ts 說明）。
+  // Windows 打包版分流：本行程可能只是前台狀態視窗，代理本體在脫離主控台的背景實例執行（見 detach.ts）。
   if (await runWindowsLauncherIfNeeded(`http://${config.server.host}:${config.server.port}/health`)) {
     return; // tail interval 會讓事件迴圈存活；視窗被關掉時本行程自然結束
   }
@@ -96,7 +95,7 @@ async function main(): Promise<void> {
   const deviceManager = new DeviceManager(bus, log);
   const registry = new PortRegistry();
 
-  // ---- 組裝裝置驅動（實體序列裝置）----
+  // ---- 組裝裝置驅動 ----
   if (config.scanner.enabled) {
     deviceManager.register(
       new ScannerDriver(
@@ -139,7 +138,7 @@ async function main(): Promise<void> {
     pressEnter: config.keyboard.pressEnter,
     paste: config.keyboard.paste,
   });
-  // 啟動即預熱 nut.js（背景、不阻塞啟動），讓第一筆掃碼不必現場等載入初始化。
+  // 背景預熱 nut.js，讓第一筆掃碼不必現場等載入初始化。
   keyboard.warmUp();
 
   const wsServer = new WsServer(bus, log, agentInfo, deviceManager, config.security, config.server.wsPath);
@@ -163,7 +162,7 @@ async function main(): Promise<void> {
   });
   wsServer.attach(httpServer);
 
-  // 訂閱要先於裝置啟動（保險），再開始監聽。
+  // 訂閱先於裝置啟動（保險），再開始監聽。
   wsServer.start();
   trafficCop.start();
   await deviceManager.startAll();
@@ -171,9 +170,8 @@ async function main(): Promise<void> {
   await listenWithRetry(httpServer, config.server.port, config.server.host, log);
 
   const base = `${config.server.host}:${config.server.port}`;
-  // 精選事件①：啟動。
+  // 精選事件：啟動。其餘細節僅 debug 模式顯示。
   log.notice(`${agentInfo.name} v${agentInfo.version} 已啟動`);
-  // 其餘啟動細節僅在 debug 模式顯示。
   log.debug(`平台 ${agentInfo.platform}`);
   log.debug(`HTTP 健康檢查：http://${base}/health`);
   log.debug(`HTTP 設備狀態：http://${base}/devices`);
@@ -183,7 +181,7 @@ async function main(): Promise<void> {
   // ---- 優雅關閉（務必釋放埠）----
   let tray: Tray | null = null;
   let shuttingDown = false;
-  // killRelated：完全結束（工作列 Exit）時，連同其他相關程序（狀態視窗）一起關掉。
+  // killRelated：完全結束（工作列 Exit）時連同相關程序（狀態視窗）一起關掉。
   const shutdown = async (sig: string, killRelated = false): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -195,7 +193,7 @@ async function main(): Promise<void> {
     }, 3000);
     watchdog.unref();
     try {
-      await tray?.stop(); // 先收攤工作列 helper 程序（等圖示消失，避免殘留幽靈圖示）
+      await tray?.stop(); // 先收攤工作列 helper（等圖示消失，避免殘留幽靈圖示）
       trafficCop.stop();
       await deviceManager.stopAll();
       await wsServer.stop();
@@ -206,11 +204,10 @@ async function main(): Promise<void> {
     } catch (err) {
       log.error("關閉時發生錯誤：", err);
     } finally {
-      // 完全結束：本身資源已釋放，再關掉其他相關程序（狀態視窗、殘留 helper），最後退出自己。
+      // 完全結束：本身資源已釋放，再關掉相關程序（狀態視窗、殘留 helper），最後退出自己。
       if (killRelated) {
         await killRelatedProcesses(log);
-        // 結束時清掉本次的 log 檔（agent.log 等）；仍被本行程 stdout 占用而刪不掉的，
-        // 下次啟動新背景實例前會再清一次（見 detach.ts cleanupLogFiles / spawnWorker）。
+        // 清掉本次的 log 檔；仍被 stdout 占用而刪不掉的，下次啟動前會再清一次（見 detach.ts）。
         const { removed } = cleanupLogFiles();
         if (removed.length) log.info(`結束：已清除 log 檔（${removed.join("、")}）。`);
       }
@@ -219,7 +216,7 @@ async function main(): Promise<void> {
       process.exit(0);
     }
   };
-  // 關閉訊號：SIGINT / SIGTERM / SIGHUP / SIGBREAK(Windows)。
+  // 關閉訊號（SIGBREAK 僅 Windows）。
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.on("SIGHUP", () => void shutdown("SIGHUP"));
@@ -227,7 +224,7 @@ async function main(): Promise<void> {
     process.on("SIGBREAK", () => void shutdown("SIGBREAK"));
   }
 
-  // 工作列常駐圖示（Windows）：背景執行時的可見入口。Exit＝完全結束（含狀態視窗與相關程序）。
+  // 工作列常駐圖示（Windows）：背景執行的可見入口。Exit＝完全結束（含狀態視窗與相關程序）。
   tray = new Tray(log, {
     version: agentInfo.version,
     onExit: () => void shutdown("工作列 Exit", true),

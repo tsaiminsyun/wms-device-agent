@@ -1,13 +1,8 @@
-// 系統匣（工作列常駐）圖示：讓背景執行的代理有可見入口與結束方式。
-// 以 systray2（選用原生相依）建立圖示與右鍵選單；選單提供「檢視 Log」與「結束程式」。
-// 僅 Windows 啟用（部署目標）；其他平台略過。載入/建立失敗自動降級（不影響背景服務）。
-//
-// systray2 會另外啟動一個原生 helper（traybin/tray_windows_release.exe，隨 node_modules 出貨）
-// 並以 stdio 溝通；本模組只做「建立選單 / 派送點擊 / 收攤」。
-//
-// 重要：systray2 的 init() 是非同步的——建構子回傳後 _process 仍為 null，
-// 因此 onError/onClick/onExit（會存取 _process）必須等 ready() 完成後再掛，
-// 否則會同步丟出 TypeError、導致點擊事件根本沒被註冊（圖示出現但選單無反應）。
+// 系統匣圖示（僅 Windows）：背景代理的可見入口，選單提供「檢視 Log」與「結束程式」。
+// 以 systray2（選用原生相依）建立；它另起原生 helper（tray_windows_release.exe）以 stdio 溝通。
+// 載入/建立失敗自動降級（不影響背景服務）。
+// 重要：systray2 的 init() 非同步——建構子回傳後 _process 仍為 null，故 onError/onClick/onExit
+// 必須等 ready() 完成後再掛，否則同步丟 TypeError、點擊事件沒被註冊（圖示出現但選單無反應）。
 
 import { nativeRequire } from "../runtime/nativeRequire.js";
 import { showStatusWindow } from "../runtime/detach.js";
@@ -72,8 +67,7 @@ export class Tray {
       return;
     }
 
-    // 保留選單項目的物件參照：systray2 點擊事件回傳的 action.item 就是「同一個物件參照」
-    // （internalIdMap 存的是原始物件），故以參照比對最穩，不受標題編碼往返影響。
+    // 保留選單項目物件參照：systray2 回傳的 action.item 即同一參照，以參照比對最穩，不受標題編碼影響。
     const logsItem: SysTrayItem = { title: ITEM_LOGS, tooltip: "開啟狀態視窗（顯示即時 log）", enabled: true };
     const exitItem: SysTrayItem = { title: ITEM_EXIT, tooltip: "完全結束程式（含狀態視窗與背景程序）", enabled: true };
 
@@ -98,7 +92,7 @@ export class Tray {
     }
     this.tray = tray;
 
-    // 等 helper 就緒後再掛事件（此時 _process 才存在），否則會丟錯而讓點擊事件沒被註冊。
+    // 等 ready() 後再掛事件（_process 才存在），否則丟錯而使點擊沒被註冊。
     tray
       .ready()
       .then(async () => {
@@ -110,8 +104,7 @@ export class Tray {
   }
 
   private onMenuClick(action: SysTrayClickAction, logsItem: SysTrayItem, exitItem: SysTrayItem): void {
-    // 以物件參照為主、__id 與標題為輔，三重比對，確保任何情況都能正確辨識點到哪一項。
-    // __id 比對需兩邊皆有值，避免 undefined === undefined 誤判。
+    // 三重比對（參照為主、__id 與標題為輔）確保辨識點到哪一項；__id 需兩邊皆有值以免誤判。
     const item = action.item;
     const idMatch = (a?: number, b?: number): boolean => a !== undefined && a === b;
     const isLogs = item === logsItem || idMatch(action.__id, logsItem.__id) || item?.title === ITEM_LOGS;
@@ -126,13 +119,11 @@ export class Tray {
   }
 
   private openLogs(): void {
-    // 啟動一個狀態視窗（wms-device-agent.exe）顯示即時 log；背景實例仍在執行，
-    // 故新實例只會 tail 同一份 agent.log、不會重複啟動背景服務（見 showStatusWindow）。
+    // 開狀態視窗顯示即時 log；背景實例仍在執行，故新實例只 tail 同一份 agent.log（見 showStatusWindow）。
     void showStatusWindow(this.log);
   }
 
-  /** 關閉時收攤 helper 程序（exitNode=false：由主程式自己決定退出時機）。
-   *  回傳 Promise，讓主程式可在真正 process.exit 前先等圖示消失，避免殘留幽靈圖示。 */
+  /** 收攤 helper（exitNode=false：退出時機由主程式決定）。回傳 Promise 讓主程式先等圖示消失，避免殘留幽靈圖示。 */
   async stop(): Promise<void> {
     if (!this.tray) return;
     const t = this.tray;

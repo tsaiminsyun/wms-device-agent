@@ -1,5 +1,4 @@
-// 埠接管（單一實例保障）：占用埠者確為本程式的殘留實例時才強制結束以接手，
-// 絕不結束其他程式的程序。
+// 埠接管（單一實例保障）：僅當占用者確為本程式殘留實例時才強制結束以接手，絕不誤殺其他程式。
 
 import { execFile } from "node:child_process";
 import { basename } from "node:path";
@@ -8,7 +7,7 @@ import type { Logger } from "../logger.js";
 
 const pexec = promisify(execFile);
 
-// 我方執行檔名（打包後為 wms-device-agent.exe；開發期為 node）。
+// 我方執行檔名（打包後 wms-device-agent.exe，開發期 node）。
 function ownImageName(): string {
   return basename(process.execPath).toLowerCase();
 }
@@ -42,7 +41,7 @@ async function findPortPids(port: number): Promise<number[]> {
   return [...pids];
 }
 
-// 確認某 PID 的執行檔名與本程式相同（相同才允許結束）。
+// 確認某 PID 執行檔名與本程式相同（相同才允許結束）。
 async function pidIsOwnExe(pid: number): Promise<boolean> {
   const self = ownImageName();
   try {

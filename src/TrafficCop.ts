@@ -1,5 +1,4 @@
-// 交警模式仲裁：掃碼時有「焦點認領」的頁面 → 走 WS 專送；否則 → 鍵盤模擬打進 OS 焦點。
-// scan 只由此處擇一路由（不雙送）；weight 與認領無關，一律由 WsServer 廣播。
+// 交警仲裁：掃碼時有焦點認領的頁面 → WS 專送；否則 → 鍵盤模擬打進 OS 焦點（擇一，不雙送）。
 
 import type { DeviceBus } from "./core/DeviceBus.js";
 import type { ScanEvent } from "./core/types.js";
@@ -34,7 +33,6 @@ export class TrafficCop {
     if (this.hasActiveClaim()) {
       const sent = this.routeScanToWs(e);
       if (sent > 0) {
-        // 一般掃碼槍模式（送給認領中的 WMS 頁面）→ 只顯示「掃碼」log。
         this.log.notice(`掃碼：${e.barcode}`);
         return;
       }
@@ -45,7 +43,7 @@ export class TrafficCop {
       this.log.debug(`無有效認領且鍵盤退路停用，丟棄掃碼：${e.barcode}`);
       return;
     }
-    // 鍵盤模擬模式 → 只顯示「鍵盤模擬」log（不再另印「掃碼」，避免重複）。
+    // 鍵盤模擬：只印此 log，不另印「掃碼」以免重複。
     this.log.notice(`掃碼槍改用鍵盤模擬輸入：${e.barcode}`);
     this.keyboard.typeBarcode(e.barcode);
   }

@@ -6,11 +6,10 @@ import type { Logger } from "../logger.js";
 
 // 裝置驅動共同介面；一個 Driver 可管理 0..N 個實體裝置。
 export interface DeviceDriver {
-  /** 驅動名稱（log 用）。 */
+  /** log 用。 */
   readonly name: string;
-  /** 開始偵測／連線裝置。 */
   start(): Promise<void>;
-  /** 停止並釋放所有資源（關閉序列埠、清除計時器等）。 */
+  /** 停止並釋放資源（序列埠、計時器等）。 */
   stop(): Promise<void>;
 }
 
@@ -48,12 +47,12 @@ export class DeviceManager {
     this.log.debug(`狀態更新 ${e.deviceId} → ${e.status}（${e.deviceName}）${e.detail ? ` | ${e.detail}` : ""}`);
   }
 
-  /** 目前所有已知裝置的狀態快照（已移除的不在內）。 */
+  /** 已知裝置的狀態快照（不含已移除者）。 */
   snapshot(): DeviceSnapshot[] {
     return [...this.snapshots.values()].sort((a, b) => a.deviceId.localeCompare(b.deviceId));
   }
 
-  /** 目前處於 connected 狀態的裝置數。 */
+  /** connected 狀態的裝置數。 */
   connectedCount(): number {
     let n = 0;
     for (const s of this.snapshots.values()) if (s.status === "connected") n++;

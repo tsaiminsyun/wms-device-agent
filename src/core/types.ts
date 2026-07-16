@@ -6,15 +6,14 @@ export type DeviceStatus = "connecting" | "connected" | "removed" | "error";
 
 // 一次掃碼結果。
 export interface ScanEvent {
-  /** 裝置實例 id，例如 "scanner-1"（同一驅動可管理多個實體埠）。 */
+  /** 裝置實例 id，如 "scanner-1"（一驅動可管多埠）。 */
   deviceId: string;
-  /** 人類可讀的裝置名稱／類別，例如 "掃碼槍"。 */
+  /** 人類可讀名稱，如 "掃碼槍"。 */
   deviceName: string;
-  /** 掃到的條碼字串（已去除前後空白與終止符）。 */
+  /** 已去除前後空白與終止符。 */
   barcode: string;
-  /** 來源裝置種類。 */
   kind: "scanner";
-  /** 產生時間（epoch ms）。 */
+  /** epoch ms。 */
   ts: number;
 }
 
@@ -22,9 +21,9 @@ export interface ScanEvent {
 export interface WeightEvent {
   deviceId: string;
   deviceName: string;
-  /** 重量（公斤）；可能為 0 或負值（秤未歸零時），由消費端決定語意。 */
+  /** 公斤；可能為 0 或負（秤未歸零），語意由消費端決定。 */
   kg: number;
-  /** 讀數是否穩定（ST=穩定 / US=不穩）。 */
+  /** ST=穩定 / US=不穩。 */
   stable: boolean;
   kind: "scale";
   ts: number;
@@ -41,14 +40,14 @@ export interface DeviceStatusEvent {
   ts: number;
 }
 
-// DeviceBus 的事件對應表（事件名 → payload）。
+// DeviceBus 事件名 → payload。
 export interface DeviceBusEvents {
   scan: ScanEvent;
   weight: WeightEvent;
   "device-status": DeviceStatusEvent;
 }
 
-// 提供給 /devices API 與 WS welcome 的單一裝置快照。
+// 單一裝置快照（供 /devices 與 WS welcome）。
 export interface DeviceSnapshot {
   deviceId: string;
   deviceName: string;

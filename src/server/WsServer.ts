@@ -44,7 +44,7 @@ export class WsServer {
   private heartbeat: NodeJS.Timeout | null = null;
   private counter = 0;
   private readonly boundUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => void;
-  // 保存 bus 監聽器供 stop() 解除。
+  // 供 stop() 解除的 bus 監聽器。
   private busListeners: Partial<{ [K in keyof DeviceBusEvents]: (e: DeviceBusEvents[K]) => void }> = {};
 
   constructor(
@@ -60,12 +60,12 @@ export class WsServer {
     this.boundUpgrade = (req, socket, head) => this.handleUpgrade(req, socket, head);
   }
 
-  /** 掛到共用 http server 的 upgrade 事件（自行做路徑與 Origin 檢查）。 */
+  /** 掛上 upgrade 事件（自行做路徑與 Origin 檢查）。 */
   attach(httpServer: HttpServer): void {
     httpServer.on("upgrade", this.boundUpgrade);
   }
 
-  /** 解除掛在 http server 的 upgrade handler（關閉/重啟用）。 */
+  /** 解除 upgrade handler（關閉/重啟用）。 */
   detach(httpServer: HttpServer): void {
     httpServer.off("upgrade", this.boundUpgrade);
   }
@@ -196,17 +196,16 @@ export class WsServer {
 
   // ---- 焦點認領查詢與 scan 路由（給 TrafficCop / HTTP 用）----
 
-  /** 該用戶端是否持有「有效（未逾時）」的焦點認領。 */
+  /** 是否持有有效（未逾時）的焦點認領。 */
   private isValidClaim(ws: WebSocket, s: ClientState, now: number): boolean {
     return ws.readyState === WebSocket.OPEN && s.focusActive && now < s.focusExpiresAt;
   }
 
-  /** 目前是否有任一用戶端持有有效的焦點認領。 */
   hasActiveClaim(): boolean {
     return this.claimingCount() > 0;
   }
 
-  /** 目前持有有效認領的用戶端數（給 /devices 顯示）。 */
+  /** 持有有效認領的用戶端數（給 /devices 顯示）。 */
   claimingCount(): number {
     const now = Date.now();
     let n = 0;

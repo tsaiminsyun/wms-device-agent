@@ -10,8 +10,7 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
 };
 
 let threshold = LEVEL_ORDER.info;
-// 精選模式：預設只輸出 notice()（使用者關心的少數事件），其餘 debug/info/warn/error 一律略過。
-// 只有把 logLevel 設成 "debug" 才會關閉精選、顯示完整 log（供疑難排解）。
+// 精選模式：只輸出 notice()，其餘一律略過；logLevel="debug" 才關閉精選、顯示完整 log。
 let curated = true;
 
 export function setLogLevel(level: LogLevel): void {
@@ -34,8 +33,7 @@ function emit(level: LogLevel, scope: string, args: unknown[]): void {
   sink(prefix, ...args);
 }
 
-// 精選事件：永遠輸出，不受 curated / threshold 影響。只用於少數使用者關心的訊息
-// （啟動、裝置初始化、掃碼值、鍵盤退路），其餘一律走 emit()（預設靜音）。
+// 精選事件：永遠輸出，不受 curated / threshold 影響。
 function emitNotice(scope: string, args: unknown[]): void {
   const prefix = `${timestamp()} [${scope}]`;
   console.log(prefix, ...args);

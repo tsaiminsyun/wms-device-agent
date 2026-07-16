@@ -18,13 +18,10 @@ import {
 // 斷流自動重連的最小間隔（節流）。
 const REOPEN_MIN_INTERVAL_MS = 60_000;
 
-// 連續開埠失敗達此次數 → 提示使用者重插 USB。埠仍在清單卻一直開不起來，
-// 多半是前一個實例（或別的程式）未正確釋放控制代碼／CH340 卡死，軟體無法自行救回，只能重插。
+// 連續開埠失敗達此次數 → 提示重插 USB（埠在清單卻開不起，多為控制代碼未釋放／CH340 卡死，軟體救不回）。
 const WARN_REPLUG_AFTER_FAILURES = 3;
 
-// 關閉單一序列埠時等待原生 close() 回呼的上限。
-// Windows 上裝置已拔除或有未完成的 I/O 時，close() 的回呼可能永不觸發；逾時即放手，
-// 確保關閉流程不被單一卡住的埠拖死（行程結束時 OS 也會釋放控制代碼）。
+// 等待原生 close() 回呼的上限；Windows 上裝置已拔或有未完成 I/O 時回呼可能永不觸發，逾時即放手（OS 於行程結束釋放）。
 const CLOSE_TIMEOUT_MS = 800;
 
 // 跨驅動共享：避免兩個驅動同時搶開同一個實體埠。
@@ -78,12 +75,11 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
 
   private readonly open = new Map<string, OpenEntry>(); // path → entry
   private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS);
-  // 斷流自動重連的節流。
-  private readonly reopenThrottle = new RetryCooldown(REOPEN_MIN_INTERVAL_MS);
+  private readonly reopenThrottle = new RetryCooldown(REOPEN_MIN_INTERVAL_MS); // 斷流自動重連節流
   private loop: PollLoop | null = null;
   private SerialPort: SerialPortCtor | null = null;
   private counter = 0;
-  // 連續開埠失敗計數（path → 次數）與「已提示重插」的 path（避免重複洗訊息）。
+  // 連續開埠失敗計數（path → 次數）與已提示重插的 path（避免洗訊息）。
   private readonly openFailures = new Map<string, number>();
   private readonly replugWarned = new Set<string>();
 
@@ -113,8 +109,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   // 斷流監看：逾此毫秒無資料視為離線；null=停用（子類別覆寫啟用）。
   protected readonly livenessTimeoutMs: number | null = null;
 
-  // serialport hupcl：false=程式開關埠不產生 DTR 高→低邊緣。
-  // 部分電子秤把 DTR 落下當休眠且需重新上電才醒，這類裝置的子類別應覆寫為 false。
+  // hupcl=false：開關埠不產生 DTR 高→低邊緣。部分電子秤把 DTR 落下當休眠且需重新上電才醒，其子類別應覆寫為 false。
   protected readonly hupcl: boolean = true;
 
   // 斷流逾此毫秒則關閉重開埠（軟體重插）救回卡死的控制代碼；null=停用。
@@ -144,9 +139,9 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.loop?.stop();
     this.loop = null;
     const entries = [...this.open.entries()];
-    // 先清空登記，避免關閉過程中殘留事件回呼再次觸發 detach／重開。
+    // 先清空登記，避免關閉過程中殘留回呼再觸發 detach／重開。
     this.open.clear();
-    // 平行關閉所有埠並徹底釋放資源（含逾時保護），確保下次啟動能立即重開該 COM 埠。
+    // 平行關閉並釋放（含逾時保護），確保下次啟動能立即重開該 COM 埠。
     await Promise.allSettled(entries.map(([path, e]) => this.closePort(path, e)));
     this.retry.reset();
     this.reopenThrottle.reset();
@@ -157,7 +152,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   /** 關閉單一序列埠並釋放所有相關資源；含逾時保護，避免原生 close() 卡住拖住整個關閉流程。 */
   private closePort(path: string, e: OpenEntry): Promise<void> {
     e.closing = true;
-    // 先移除所有監聽器：關閉期間不再處理 data/open/error/close，避免殘留閉包與重入。
+    // 先移除所有監聽器，避免關閉期間殘留閉包與重入。
     try {
       e.port.removeAllListeners("data");
       e.port.removeAllListeners("open");
@@ -182,8 +177,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         finish();
       }, CLOSE_TIMEOUT_MS);
       timer.unref?.();
-      // 不分 isOpen 一律呼叫 close()：正開啟中（autoOpen）時會擲錯（改由 catch 收尾）或排入關閉佇列，
-      // 都能保證原生控制代碼被關閉，不會有「已關但底層仍占用」的 COM 埠殘留。
+      // 不分 isOpen 一律 close()：開啟中會擲錯（由 catch 收尾）或排入關閉佇列，都保證原生控制代碼被釋放，無殘留占用。
       try {
         e.port.close((err) => {
           if (err) this.log.debug(`[${e.handle.uid}] 關閉 ${path} 回報：`, err);
@@ -213,7 +207,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         this.reopenThrottle.schedule(path);
         this.log.info(`[${entry.handle.uid}] 斷流逾 ${this.livenessRecoveryMs}ms → 自動重連（關閉後重開 ${path}）`);
         this.detach(path, entry, "斷流自動重連");
-        this.retry.clear(path); // 讓下一輪輪詢立即重開，不受開啟失敗冷卻影響
+        this.retry.clear(path); // 下一輪輪詢立即重開，不受開啟失敗冷卻影響
       }
     }
   }
@@ -231,7 +225,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       }
       this.retry.prune(seen);
       this.reopenThrottle.prune(seen);
-      // 埠從清單消失（拔除）→ 清掉失敗計數與提示狀態，重插後重新計。
+      // 拔除後清掉失敗計數與提示狀態，重插後重新計。
       for (const p of [...this.openFailures.keys()]) if (!seen.has(p)) this.openFailures.delete(p);
       for (const p of [...this.replugWarned]) if (!seen.has(p)) this.replugWarned.delete(p);
 
@@ -276,7 +270,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       this.registry.release(info.path);
       this.retry.schedule(info.path);
       handle.pushStatus("error", `開啟失敗：${(err as Error).message}`);
-      this.noteOpenFailure(info.path, (err as Error).message);
+      this.noteOpenFailure(info.path);
       return;
     }
 
@@ -285,9 +279,9 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
 
     port.on("open", () => {
       this.retry.clear(info.path);
-      this.openFailures.delete(info.path); // 成功開啟 → 清掉失敗計數與重插提示
+      this.openFailures.delete(info.path); // 成功開啟 → 清失敗計數與重插提示
       this.replugWarned.delete(info.path);
-      entry.lastDataAt = Date.now(); // 重置寬限期，避免剛開埠就被 liveness 誤判斷流
+      entry.lastDataAt = Date.now(); // 重置寬限期，避免剛開埠就被 liveness 誤判
       this.onOpen(handle);
     });
     port.on("data", (chunk: Buffer) => {
@@ -297,7 +291,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         this.log.info(`[${uid}] 資料恢復 → 重新上線`);
         this.onLivenessRestored(handle);
       }
-      const text = chunk.toString("latin1"); // 條碼／秤資料多為 ASCII/拉丁，避免多位元組誤切
+      const text = chunk.toString("latin1"); // 條碼／秤資料多為 ASCII，用 latin1 避免多位元組誤切
       for (const line of framer.push(text)) this.handleLine(line, handle);
     });
     port.on("error", (err: Error) => {
@@ -307,7 +301,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
           `[${uid}] 開啟 ${info.path} 失敗：${err.message}（${this.retry.cooldownMs / 1000}s 後重試；常見原因：埠被其他程序佔用）`,
         );
         this.retry.schedule(info.path);
-        this.noteOpenFailure(info.path, err.message);
+        this.noteOpenFailure(info.path);
         this.detach(info.path, entry, "開啟失敗");
         return;
       }
@@ -326,7 +320,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.registry.release(path);
     entry.framer.reset();
     try {
-      // 先移除監聽器再關閉，避免殘留事件持有閉包造成洩漏。
+      // 先移除監聽器再關閉，避免殘留閉包洩漏。
       entry.port.removeAllListeners("data");
       entry.port.removeAllListeners("open");
       entry.port.removeAllListeners("error");
@@ -339,9 +333,8 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.pushStatus(entry.handle.uid, "removed", "");
   }
 
-  // 累計開埠失敗；連續達門檻時，提示使用者重插 USB（只提示一次，成功開啟或裝置重插後重置）。
-  // 用 notice 輸出（精選事件），確保預設精簡 log 也看得到這個需要使用者處理的訊息。
-  private noteOpenFailure(path: string, message: string): void {
+  // 累計開埠失敗；連續達門檻時提示重插 USB（只提示一次，成功開啟或重插後重置）。用 notice 確保精簡 log 也看得到。
+  private noteOpenFailure(path: string): void {
     const count = (this.openFailures.get(path) ?? 0) + 1;
     this.openFailures.set(path, count);
     if (count >= WARN_REPLUG_AFTER_FAILURES && !this.replugWarned.has(path)) {

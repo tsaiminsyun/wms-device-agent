@@ -11,9 +11,8 @@ export interface HttpApiDeps {
   log: Logger;
   agentInfo: AgentInfo;
   deviceManager: DeviceManager;
-  /** 提供目前 WS 用戶端數。 */
   activeClientCount(): number;
-  /** 目前持有有效焦點認領（前景 WMS 頁面）的用戶端數。 */
+  /** 持有有效焦點認領（前景 WMS 頁面）的用戶端數。 */
   claimingClientCount(): number;
   security: OriginPolicy;
   /** 啟動時間（epoch ms），算 uptime 用。 */

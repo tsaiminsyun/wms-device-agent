@@ -29,7 +29,7 @@ const UsagePageSchema = z.union([z.number().int().nonnegative(), z.string()]).tr
 // 掃碼去重窗（毫秒）：窗內同一條碼只送第一筆；0=關閉。
 const DedupWindowMsSchema = z.number().int().min(0).default(1500);
 
-// 每個子物件都加 .default({})：整段缺席時仍套用各欄位預設，而非報 Required。
+// 每個子物件加 .default({})：整段缺席時仍套用各欄位預設，而非報 Required。
 export const ConfigSchema = z.object({
   server: z
     .object({
@@ -81,7 +81,7 @@ export const ConfigSchema = z.object({
     .object({
       enabled: z.boolean().default(true),
       pressEnter: z.boolean().default(true),
-      // true＝以「貼上」整串送出（剪貼簿＋Ctrl/Cmd+V，快且不掉字）；false＝逐字輸入（相容性最高）。
+      // true＝貼上整串（剪貼簿＋Ctrl/Cmd+V，快且不掉字）；false＝逐字輸入（相容性最高）。
       paste: z.boolean().default(true),
     })
     .default({}),

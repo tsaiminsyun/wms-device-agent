@@ -1,8 +1,5 @@
 // 系統鍵盤模擬（nut.js，選用相依）：把條碼送進 OS 焦點輸入框（＋選用 Enter）。
-// 兩種送出方式：
-//   - paste（預設）：把條碼放上剪貼簿 → 送 Ctrl+V（macOS 為 Cmd+V）→ 還原剪貼簿。
-//     整串一次貼上（類似複製貼上），不逐字輸入——快、不掉字、對 IME 友善。
-//   - type：以 nut.js 逐字輸入（相容性最高，作為 paste 不可用時的退路）。
+// paste（預設）：剪貼簿＋Ctrl/Cmd+V 整串貼上，快且不掉字、對 IME 友善；type：逐字輸入，作退路。
 // 載入失敗自動降級為 no-op；多筆掃碼排隊逐一送出，避免交錯。
 
 import { nativeRequire } from "../runtime/nativeRequire.js";
@@ -26,7 +23,7 @@ interface NutModule {
 }
 
 const SUPPORTED_PLATFORMS = new Set(["win32", "darwin", "linux"]);
-// 貼上後、還原剪貼簿前的等待：讓目標視窗先完成貼上（部分程式的貼上處理是非同步）。
+// 還原剪貼簿前的等待：讓目標視窗先完成貼上（部分程式的貼上是非同步）。
 const RESTORE_CLIPBOARD_DELAY_MS = 150;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -48,11 +45,7 @@ export class KeyboardEmulator {
     return this.opts.enabled;
   }
 
-  /**
-   * 啟動時預熱（非同步、不阻塞）：預先載入 nut.js 原生模組並初始化提供者，
-   * 讓第一筆掃碼不必現場等載入＋初始化（原本要數秒）。透過同一條佇列排入，
-   * 因此即使預熱途中就有掃碼進來也不會交錯，且掃碼會緊接在預熱之後執行。
-   */
+  /** 非同步預熱：先載入 nut.js 並初始化提供者，讓第一筆掃碼免現場等（原本數秒）。走同一佇列，故不與掃碼交錯。 */
   warmUp(): void {
     if (!this.opts.enabled || this.primed) return;
     this.queue = this.queue.then(() => this.prime()).catch(() => {});
@@ -63,9 +56,9 @@ export class KeyboardEmulator {
     const mod = await this.load();
     if (!mod) return;
     try {
-      // 打空字串：不輸出任何按鍵，但會觸發 nut.js 原生打字提供者的一次性初始化。
+      // 打空字串：不輸出按鍵，但觸發 nut.js 打字提供者的一次性初始化。
       await mod.keyboard.type("");
-      // paste 模式也預熱剪貼簿提供者（讀取一次），避免第一筆貼上時才初始化。
+      // paste 模式也預熱剪貼簿提供者（讀一次）。
       if (this.opts.paste) await mod.clipboard.getContent().catch(() => "");
       this.primed = true;
       this.log.info("鍵盤模擬已預熱，第一筆掃碼可即時輸入。");
@@ -87,7 +80,7 @@ export class KeyboardEmulator {
       if (!m?.keyboard || typeof m.keyboard.type !== "function" || typeof m.Key?.Enter !== "number") {
         throw new Error("nut.js 介面不符預期（keyboard.type / Key.Enter 缺失）");
       }
-      m.keyboard.config.autoDelayMs = 0; // 逐字模式時零延遲，盡快打完
+      m.keyboard.config.autoDelayMs = 0; // 逐字模式零延遲，盡快打完
       this.mod = m;
       this.log.info(`鍵盤模擬（nut.js）已就緒，送出方式：${this.opts.paste ? "貼上(paste)" : "逐字(type)"}。`);
     } catch (err) {
@@ -129,8 +122,7 @@ export class KeyboardEmulator {
       pasted = await this.pasteText(mod, text);
     }
     if (!pasted) {
-      // 逐字輸入（paste 未啟用或失敗時的退路）。
-      await mod.keyboard.type(text);
+      await mod.keyboard.type(text); // paste 未啟用或失敗時逐字輸入
     }
     if (this.opts.pressEnter) {
       await mod.keyboard.pressKey(mod.Key.Enter);
@@ -161,7 +153,7 @@ export class KeyboardEmulator {
       await mod.clipboard.setContent(text);
       await mod.keyboard.pressKey(modifier, mod.Key.V);
       await mod.keyboard.releaseKey(modifier, mod.Key.V);
-      // 還原使用者原本的剪貼簿內容（等目標視窗貼完再還原，避免搶在貼上前覆蓋）。
+      // 等目標視窗貼完再還原剪貼簿，避免搶在貼上前覆蓋。
       if (prev !== null) {
         void delay(RESTORE_CLIPBOARD_DELAY_MS).then(async () => {
           try {

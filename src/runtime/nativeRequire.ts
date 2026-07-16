@@ -1,5 +1,5 @@
-// 原生選用相依的統一載入器：SEA 打包時的 require 只支援 builtin，
-// 須以 createRequire(process.execPath) 從 exe 旁的 node_modules 解析；開發/dist 照常解析。
+// 原生選用相依的統一載入器：SEA 打包時 require 只支援 builtin，須以 createRequire(process.execPath)
+// 從 exe 旁的 node_modules 解析；開發/dist 照常解析。
 
 import { createRequire } from "node:module";
 
@@ -15,7 +15,7 @@ export function isSeaBuild(): boolean {
 
 let cachedRequire: NodeJS.Require | null = null;
 
-/** 以執行情境對應的基準路徑 require 一個（原生）模組；解析失敗會拋錯，由呼叫端降級處理。 */
+/** 以執行情境對應的基準路徑 require 原生模組；解析失敗會拋錯，由呼叫端降級處理。 */
 export function nativeRequire(id: string): unknown {
   if (!cachedRequire) {
     cachedRequire = createRequire(isSeaBuild() ? process.execPath : import.meta.url);

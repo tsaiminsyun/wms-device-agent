@@ -134,7 +134,7 @@ const SubscribeSchema = z.object({
   type: z.literal("subscribe"),
   topics: z.array(z.enum(["scan", "weight", "device-status"])).default([...ALL_TOPICS]),
 });
-// 焦點認領：前景送 active:true（需定期續約，見 WsServer TTL），失焦送 false。
+// 焦點認領：active:true 需定期續約（見 WsServer TTL），失焦送 false。
 const FocusSchema = z.object({
   type: z.literal("focus"),
   active: z.boolean(),

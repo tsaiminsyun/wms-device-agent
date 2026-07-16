@@ -49,8 +49,7 @@ export class ScanEmitter {
       this.log.debug(`[${uid}] 連續重讀，抑制：${barcode}`);
       return;
     }
-    // 掃到的值不在這裡印；改由 TrafficCop 依實際路由（WS 專送 vs 鍵盤模擬）擇一輸出，
-    // 避免鍵盤模擬模式同時出現「掃碼」與「鍵盤模擬」兩筆重複 log。
+    // 值不在此印；由 TrafficCop 依路由（WS 專送 vs 鍵盤模擬）擇一輸出，避免鍵盤模擬模式出現重複 log。
     this.log.debug(`[${uid}] 掃碼：${barcode}`);
     this.bus.emit("scan", { deviceId: uid, deviceName: this.deviceName, barcode, kind: "scanner", ts: Date.now() });
   }

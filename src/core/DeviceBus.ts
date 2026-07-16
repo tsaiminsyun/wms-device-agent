@@ -7,7 +7,7 @@ export class DeviceBus {
   private readonly emitter = new EventEmitter();
 
   constructor() {
-    // 放寬監聽上限，避免誤報洩漏警告。
+    // 放寬上限避免誤報洩漏警告。
     this.emitter.setMaxListeners(50);
   }
 
