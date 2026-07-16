@@ -68,6 +68,8 @@ export class ScaleDriver extends SerialDeviceDriver {
       h.markIdentified();
       h.pushStatus("connected", chipText(h.info)); // 升級為「電子秤」
       this.log.info(`[${h.uid}] 資料指紋命中 → 辨識為電子秤`);
+      // 精選事件②：裝置初始化（電子秤）。
+      this.log.notice(`電子秤已初始化：${h.info.path}`);
     }
     const parsed = parseScaleLine(line);
     if (parsed) this.emitReading(h.uid, parsed.kg, parsed.stable);

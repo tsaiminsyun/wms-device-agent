@@ -152,6 +152,8 @@ export class HidScannerDriver implements DeviceDriver {
     const up = typeof info.usagePage === "number" ? `0x${info.usagePage.toString(16)}` : "?";
     this.pushStatus(uid, "connected", `${productName} (${idText}) usagePage=${up}`);
     this.log.info(`[${uid}] 已連線 HID 掃碼槍｜${productName}｜${idText}｜usagePage=${up}`);
+    // 精選事件②：裝置初始化（掃碼槍 HID）。
+    this.log.notice(`掃碼槍（HID）已初始化：${productName}（${idText}）`);
 
     device.on("data", (data: Buffer) => this.onReport(entry, data));
     device.on("error", (err: Error) => {

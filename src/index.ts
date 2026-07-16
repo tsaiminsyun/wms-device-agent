@@ -7,6 +7,7 @@ import type { Server as HttpServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { createLogger, setLogLevel, type Logger } from "./logger.js";
 import { freePortIfOwnedByUs } from "./runtime/freePort.js";
+import { runWindowsLauncherIfNeeded, killRelatedProcesses, cleanupLogFiles } from "./runtime/detach.js";
 import { DeviceBus } from "./core/DeviceBus.js";
 import { DeviceManager } from "./core/DeviceManager.js";
 import { PortRegistry } from "./devices/serial/SerialDeviceDriver.js";
@@ -18,6 +19,7 @@ import { TrafficCop } from "./TrafficCop.js";
 import { WsServer } from "./server/WsServer.js";
 import { createApiServer } from "./server/httpApi.js";
 import { PROTOCOL_VERSION, type AgentInfo } from "./server/protocol.js";
+import { Tray } from "./tray/Tray.js";
 
 // 打包（SEA）時由 esbuild --define 注入。
 declare const __PKG_META__: { name: string; version: string } | undefined;
@@ -72,6 +74,13 @@ async function listenWithRetry(server: HttpServer, port: number, host: string, l
 
 async function main(): Promise<void> {
   const config = loadConfig();
+
+  // Windows 打包版分流：本行程可能只是「前台狀態視窗」（顯示 log），
+  // 代理本體在另一個脫離主控台的背景實例執行（見 runtime/detach.ts 說明）。
+  if (await runWindowsLauncherIfNeeded(`http://${config.server.host}:${config.server.port}/health`)) {
+    return; // tail interval 會讓事件迴圈存活；視窗被關掉時本行程自然結束
+  }
+
   setLogLevel(config.logLevel);
   const log = createLogger("agent");
   const meta = readPackageMeta();
@@ -162,17 +171,20 @@ async function main(): Promise<void> {
   await listenWithRetry(httpServer, config.server.port, config.server.host, log);
 
   const base = `${config.server.host}:${config.server.port}`;
-  log.info("──────────────────────────────────────────────");
-  log.info(`${agentInfo.name} v${agentInfo.version} 已啟動（平台 ${agentInfo.platform}）`);
-  log.info(`HTTP 健康檢查：http://${base}/health`);
-  log.info(`HTTP 設備狀態：http://${base}/devices`);
-  log.info(`WebSocket    ：ws://${base}${config.server.wsPath}（協定 v${PROTOCOL_VERSION}）`);
-  log.info(`允許 Origin  ：${config.security.allowedOrigins.join(", ") || "(無)"}｜允許無 Origin：${config.security.allowNoOrigin}`);
-  log.info("──────────────────────────────────────────────");
+  // 精選事件①：啟動。
+  log.notice(`${agentInfo.name} v${agentInfo.version} 已啟動`);
+  // 其餘啟動細節僅在 debug 模式顯示。
+  log.debug(`平台 ${agentInfo.platform}`);
+  log.debug(`HTTP 健康檢查：http://${base}/health`);
+  log.debug(`HTTP 設備狀態：http://${base}/devices`);
+  log.debug(`WebSocket    ：ws://${base}${config.server.wsPath}（協定 v${PROTOCOL_VERSION}）`);
+  log.debug(`允許 Origin  ：${config.security.allowedOrigins.join(", ") || "(無)"}｜允許無 Origin：${config.security.allowNoOrigin}`);
 
   // ---- 優雅關閉（務必釋放埠）----
+  let tray: Tray | null = null;
   let shuttingDown = false;
-  const shutdown = async (sig: string): Promise<void> => {
+  // killRelated：完全結束（工作列 Exit）時，連同其他相關程序（狀態視窗）一起關掉。
+  const shutdown = async (sig: string, killRelated = false): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info(`收到 ${sig}，開始關閉…`);
@@ -183,6 +195,7 @@ async function main(): Promise<void> {
     }, 3000);
     watchdog.unref();
     try {
+      await tray?.stop(); // 先收攤工作列 helper 程序（等圖示消失，避免殘留幽靈圖示）
       trafficCop.stop();
       await deviceManager.stopAll();
       await wsServer.stop();
@@ -193,6 +206,14 @@ async function main(): Promise<void> {
     } catch (err) {
       log.error("關閉時發生錯誤：", err);
     } finally {
+      // 完全結束：本身資源已釋放，再關掉其他相關程序（狀態視窗、殘留 helper），最後退出自己。
+      if (killRelated) {
+        await killRelatedProcesses(log);
+        // 結束時清掉本次的 log 檔（agent.log 等）；仍被本行程 stdout 占用而刪不掉的，
+        // 下次啟動新背景實例前會再清一次（見 detach.ts cleanupLogFiles / spawnWorker）。
+        const { removed } = cleanupLogFiles();
+        if (removed.length) log.info(`結束：已清除 log 檔（${removed.join("、")}）。`);
+      }
       clearTimeout(watchdog);
       log.info("已關閉。");
       process.exit(0);
@@ -205,6 +226,13 @@ async function main(): Promise<void> {
   if (process.platform === "win32") {
     process.on("SIGBREAK", () => void shutdown("SIGBREAK"));
   }
+
+  // 工作列常駐圖示（Windows）：背景執行時的可見入口。Exit＝完全結束（含狀態視窗與相關程序）。
+  tray = new Tray(log, {
+    version: agentInfo.version,
+    onExit: () => void shutdown("工作列 Exit", true),
+  });
+  tray.start();
 }
 
 main().catch((err) => {

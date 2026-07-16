@@ -72,5 +72,5 @@ describe("TrafficCop（交警模式仲裁，焦點認領）", () => {
 
 function mutedLog() {
   const noop = () => {};
-  return { debug: noop, info: noop, warn: noop, error: noop, child: () => mutedLog() } as never;
+  return { debug: noop, info: noop, warn: noop, error: noop, notice: noop, child: () => mutedLog() } as never;
 }

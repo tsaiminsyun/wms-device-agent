@@ -33,7 +33,11 @@ export class TrafficCop {
   private onScan(e: ScanEvent): void {
     if (this.hasActiveClaim()) {
       const sent = this.routeScanToWs(e);
-      if (sent > 0) return;
+      if (sent > 0) {
+        // 一般掃碼槍模式（送給認領中的 WMS 頁面）→ 只顯示「掃碼」log。
+        this.log.notice(`掃碼：${e.barcode}`);
+        return;
+      }
       // 認領剛失效（競態）→ 鍵盤退路。
       this.log.debug("認領剛失效，掃碼改走鍵盤退路");
     }
@@ -41,7 +45,8 @@ export class TrafficCop {
       this.log.debug(`無有效認領且鍵盤退路停用，丟棄掃碼：${e.barcode}`);
       return;
     }
-    this.log.info(`無有效認領 → 走鍵盤模擬退路：${e.barcode}`);
+    // 鍵盤模擬模式 → 只顯示「鍵盤模擬」log（不再另印「掃碼」，避免重複）。
+    this.log.notice(`掃碼槍改用鍵盤模擬輸入：${e.barcode}`);
     this.keyboard.typeBarcode(e.barcode);
   }
 

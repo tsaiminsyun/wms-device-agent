@@ -3,7 +3,9 @@
     "allow": [
       "Bash(grep -iE \"^\\\\s+[A-Za-z].*:$|Product ID|Vendor ID|Manufacturer|Location ID\")",
       "Bash(grep -iB1 -A6 -E \"symbol|zebra|motorola|barcode|scanner|LS4278|honeywell|datalogic\")",
-      "Bash(git checkout *)"
+      "Bash(git checkout *)",
+      "Bash(echo \"exit=$? ; bundle size: $\\(wc -c < /tmp/agent-bundle-test.cjs \\) bytes\")",
+      "Read(//private/var/folders/55/66jvpyy50tz3n2r6bn1xznjm0000gp/T/**)"
     ]
   }
 }
