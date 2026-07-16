@@ -30,6 +30,12 @@ export class ScannerDriver extends SerialDeviceDriver {
     return vid !== null && this.vendorIds.includes(vid);
   }
 
+  protected override onOpen(h: SerialPortHandle): void {
+    super.onOpen(h); // 內部狀態回報＋（debug）詳細 log
+    // 精選事件②：裝置初始化（掃碼槍 CDC）。
+    this.log.notice(`掃碼槍（CDC）已初始化：${h.info.path}`);
+  }
+
   protected handleLine(line: string, h: SerialPortHandle): void {
     const barcode = line.trim();
     if (barcode) this.scan.emit(h.uid, barcode);

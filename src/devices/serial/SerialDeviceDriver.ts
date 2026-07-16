@@ -18,6 +18,10 @@ import {
 // 斷流自動重連的最小間隔（節流）。
 const REOPEN_MIN_INTERVAL_MS = 60_000;
 
+// 連續開埠失敗達此次數 → 提示使用者重插 USB。埠仍在清單卻一直開不起來，
+// 多半是前一個實例（或別的程式）未正確釋放控制代碼／CH340 卡死，軟體無法自行救回，只能重插。
+const WARN_REPLUG_AFTER_FAILURES = 3;
+
 // 關閉單一序列埠時等待原生 close() 回呼的上限。
 // Windows 上裝置已拔除或有未完成的 I/O 時，close() 的回呼可能永不觸發；逾時即放手，
 // 確保關閉流程不被單一卡住的埠拖死（行程結束時 OS 也會釋放控制代碼）。
@@ -79,6 +83,9 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   private loop: PollLoop | null = null;
   private SerialPort: SerialPortCtor | null = null;
   private counter = 0;
+  // 連續開埠失敗計數（path → 次數）與「已提示重插」的 path（避免重複洗訊息）。
+  private readonly openFailures = new Map<string, number>();
+  private readonly replugWarned = new Set<string>();
 
   protected readonly log: Logger;
 
@@ -143,6 +150,8 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     await Promise.allSettled(entries.map(([path, e]) => this.closePort(path, e)));
     this.retry.reset();
     this.reopenThrottle.reset();
+    this.openFailures.clear();
+    this.replugWarned.clear();
   }
 
   /** 關閉單一序列埠並釋放所有相關資源；含逾時保護，避免原生 close() 卡住拖住整個關閉流程。 */
@@ -222,6 +231,9 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       }
       this.retry.prune(seen);
       this.reopenThrottle.prune(seen);
+      // 埠從清單消失（拔除）→ 清掉失敗計數與提示狀態，重插後重新計。
+      for (const p of [...this.openFailures.keys()]) if (!seen.has(p)) this.openFailures.delete(p);
+      for (const p of [...this.replugWarned]) if (!seen.has(p)) this.replugWarned.delete(p);
 
       // 偵測新增：符合條件、尚未開啟、未被其他驅動占用、且不在重試冷卻中。
       for (const info of ports) {
@@ -264,6 +276,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       this.registry.release(info.path);
       this.retry.schedule(info.path);
       handle.pushStatus("error", `開啟失敗：${(err as Error).message}`);
+      this.noteOpenFailure(info.path, (err as Error).message);
       return;
     }
 
@@ -272,6 +285,8 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
 
     port.on("open", () => {
       this.retry.clear(info.path);
+      this.openFailures.delete(info.path); // 成功開啟 → 清掉失敗計數與重插提示
+      this.replugWarned.delete(info.path);
       entry.lastDataAt = Date.now(); // 重置寬限期，避免剛開埠就被 liveness 誤判斷流
       this.onOpen(handle);
     });
@@ -292,6 +307,7 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
           `[${uid}] 開啟 ${info.path} 失敗：${err.message}（${this.retry.cooldownMs / 1000}s 後重試；常見原因：埠被其他程序佔用）`,
         );
         this.retry.schedule(info.path);
+        this.noteOpenFailure(info.path, err.message);
         this.detach(info.path, entry, "開啟失敗");
         return;
       }
@@ -321,6 +337,20 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     }
     this.log.info(`[${entry.handle.uid}] 移除（${reason}）：${path}`);
     this.pushStatus(entry.handle.uid, "removed", "");
+  }
+
+  // 累計開埠失敗；連續達門檻時，提示使用者重插 USB（只提示一次，成功開啟或裝置重插後重置）。
+  // 用 notice 輸出（精選事件），確保預設精簡 log 也看得到這個需要使用者處理的訊息。
+  private noteOpenFailure(path: string, message: string): void {
+    const count = (this.openFailures.get(path) ?? 0) + 1;
+    this.openFailures.set(path, count);
+    if (count >= WARN_REPLUG_AFTER_FAILURES && !this.replugWarned.has(path)) {
+      this.replugWarned.add(path);
+      this.log.notice(
+        `${this.displayName}無法連線（${path}）：連續 ${count} 次連線失敗。` +
+          `請將該 USB 裝置拔除後重新插上，即可自動恢復連線。`,
+      );
+    }
   }
 
   protected pushStatus(uid: string, status: DeviceStatus, detail: string, nameOverride?: string): void {

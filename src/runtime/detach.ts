@@ -114,14 +114,8 @@ export async function runWindowsLauncherIfNeeded(healthUrl: string): Promise<boo
   }
 
   process.title = STATUS_WINDOW_TITLE;
-  console.log("==============================================================");
-  console.log(" WMS Device Agent" + (already ? "（已在背景執行）" : " 已於背景啟動"));
-  console.log("");
-  console.log(" ．這個視窗只是「狀態視窗」，顯示即時 log。");
-  console.log(" ．按右上角 X 關閉此視窗【不會】停止程式——它會繼續在背景執行，");
-  console.log("   圖示在工作列右下角的系統匣（看不到就按「^」展開隱藏的圖示）。");
-  console.log(" ．要完全結束程式：在系統匣圖示上按右鍵 →「結束程式 (Exit)」。");
-  console.log("==============================================================");
+  // 不顯示 detach 相關說明；開窗即顯示執行狀態，讓視窗在還沒有 log 輸出前也不會一片空白。
+  console.log("WMS Device Agent 正在啟動中...");
   console.log("");
   tailLog(logPath);
   return true;

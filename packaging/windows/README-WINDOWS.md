@@ -55,7 +55,7 @@ Windows 服務（session 0）打不進使用者的視窗。若不需要鍵盤退
 | 手動啟動／看狀態 | 雙擊 `wms-device-agent.exe`（已在執行時只會再開一個狀態視窗，不會重複啟動） |
 | 關閉狀態視窗 | 按視窗右上角 X（程式繼續在背景執行，系統匣圖示還在） |
 | 停止 | **系統匣圖示按右鍵 →「結束程式 (Exit)」**（正常關閉方式）。不得已才用工作管理員結束 `wms-device-agent.exe` |
-| 看 log | 開 `agent.log`（需要更多細節時把 `config.json` 的 `logLevel` 改成 `"debug"` 後重啟） |
+| 看 log | 開 `agent.log`。預設只記錄四類重點：啟動、裝置初始化（電子秤／掃碼槍 CDC／HID）、掃到的條碼值、改走鍵盤模擬。**需要完整診斷 log（含錯誤與警告）時**把 `config.json` 的 `logLevel` 改成 `"debug"` 後重啟 |
 | 查裝置狀態 | 瀏覽器開 `http://127.0.0.1:8788/devices` |
 | 升級版本 | 用 `update-agent.bat`（見下方「更新版本」），不要手動覆蓋 |
 

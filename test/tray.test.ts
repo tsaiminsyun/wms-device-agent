@@ -38,8 +38,8 @@ vi.mock("../src/runtime/detach", () => ({ showStatusWindow: showStatusWindowMock
 import { Tray } from "../src/tray/Tray";
 
 const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => log } as never;
-const EXIT_TITLE = "結束程式 (Exit)";
-const LOGS_TITLE = "檢視 Log (View Logs)";
+const EXIT_TITLE = "結束";
+const LOGS_TITLE = "開啟";
 const flush = () => new Promise((r) => setTimeout(r, 0)); // 等 ready().then 掛好 onClick
 
 // 取回 Tray 內部建立、放進選單的項目物件（模擬 systray2 回傳同一參照）。

@@ -40,8 +40,8 @@ interface SysTrayInstance {
 }
 type SysTrayCtor = new (conf: SysTrayConf) => SysTrayInstance;
 
-const ITEM_LOGS = "檢視 Log (View Logs)";
-const ITEM_EXIT = "結束程式 (Exit)";
+const ITEM_LOGS = "開啟";
+const ITEM_EXIT = "結束";
 
 export interface TrayOptions {
   version: string;

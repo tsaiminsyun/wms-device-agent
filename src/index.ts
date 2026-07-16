@@ -171,13 +171,14 @@ async function main(): Promise<void> {
   await listenWithRetry(httpServer, config.server.port, config.server.host, log);
 
   const base = `${config.server.host}:${config.server.port}`;
-  log.info("──────────────────────────────────────────────");
-  log.info(`${agentInfo.name} v${agentInfo.version} 已啟動（平台 ${agentInfo.platform}）`);
-  log.info(`HTTP 健康檢查：http://${base}/health`);
-  log.info(`HTTP 設備狀態：http://${base}/devices`);
-  log.info(`WebSocket    ：ws://${base}${config.server.wsPath}（協定 v${PROTOCOL_VERSION}）`);
-  log.info(`允許 Origin  ：${config.security.allowedOrigins.join(", ") || "(無)"}｜允許無 Origin：${config.security.allowNoOrigin}`);
-  log.info("──────────────────────────────────────────────");
+  // 精選事件①：啟動。
+  log.notice(`${agentInfo.name} v${agentInfo.version} 已啟動`);
+  // 其餘啟動細節僅在 debug 模式顯示。
+  log.debug(`平台 ${agentInfo.platform}`);
+  log.debug(`HTTP 健康檢查：http://${base}/health`);
+  log.debug(`HTTP 設備狀態：http://${base}/devices`);
+  log.debug(`WebSocket    ：ws://${base}${config.server.wsPath}（協定 v${PROTOCOL_VERSION}）`);
+  log.debug(`允許 Origin  ：${config.security.allowedOrigins.join(", ") || "(無)"}｜允許無 Origin：${config.security.allowNoOrigin}`);
 
   // ---- 優雅關閉（務必釋放埠）----
   let tray: Tray | null = null;
