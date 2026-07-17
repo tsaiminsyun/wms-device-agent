@@ -79,7 +79,7 @@ pnpm 預設封鎖相依的安裝腳本；本 repo 已在 [pnpm-workspace.yaml](p
 |---|---|---|
 | `serialport` | 序列掃碼槍（CDC）、電子秤 | 實體序列裝置停用 |
 | `node-hid` | HID-POS 掃碼槍 | HID 掃碼槍停用 |
-| `@nut-tree-fork/nut-js` | 鍵盤模擬退路 | 無認領時掃碼丟棄 |
+| `@nut-tree-fork/nut-js` | 鍵盤模擬退路（macOS/Linux；Windows 主用內建剪貼簿貼上，nut.js 僅後備） | Windows 不受影響；其他平台無認領時掃碼丟棄 |
 
 ---
 
@@ -353,7 +353,7 @@ pnpm package:win   # 產出 dist-win/ 與 wms-device-agent-<版本>-win-x64.zip
 
 | 症狀 | 解法 |
 |---|---|
-| 無認領時掃碼沒打字 | nut.js 載入失敗會告警；macOS 需在「隱私權 → 輔助使用」授權；確認 `KEYBOARD_ENABLED` 與 `scanner.keyboardFallback` 未關。 |
+| 無認領時掃碼沒打字 | Windows 以剪貼簿整串貼上（clip.exe＋wscript 送 Ctrl+V），失敗才退 nut.js（log 會告警）；macOS 需在「隱私權 → 輔助使用」授權；確認 `KEYBOARD_ENABLED` 與 `scanner.keyboardFallback` 未關。 |
 | WS 連線被拒（403） | Origin 不在白名單：加進 `security.allowedOrigins`。agent log 印被拒的 Origin。 |
 | `curl` / `wscat` 連不上 | `ALLOW_NO_ORIGIN=false` 時無 Origin 工具被拒；測試暫設 `true`。 |
 | 收得到 `weight` 但收不到 `scan` | 正常：`scan` 只送認領頁面，需送 `focus active:true` 並續約。 |

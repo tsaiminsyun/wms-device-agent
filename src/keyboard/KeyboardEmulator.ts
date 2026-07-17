@@ -1,9 +1,17 @@
-// 系統鍵盤模擬（nut.js，選用相依）：把條碼送進 OS 焦點輸入框（＋選用 Enter）。
-// paste（預設）：剪貼簿＋Ctrl/Cmd+V 整串貼上，快且不掉字、對 IME 友善；type：逐字輸入，作退路。
-// 載入失敗自動降級為 no-op；多筆掃碼排隊逐一送出，避免交錯。
+// 系統鍵盤模擬：把條碼送進 OS 焦點輸入框（＋選用 Enter）；多筆掃碼排隊逐一送出，避免交錯。
+// Windows 主路徑＝整串「貼上」：clip.exe 設剪貼簿 → wscript 送 Ctrl+V（單一按鍵，一次貼入、不掉字、不逐字）＋Enter。
+// 全用 Windows 內建工具（零相依、免 PowerShell、無 nut.js 閃屏）；失敗自動退 nut.js。
+// 其他平台走 nut.js（paste=剪貼簿整串貼上；type=逐字）。載入失敗降級為 no-op。
 
+import { execFile, spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import { nativeRequire } from "../runtime/nativeRequire.js";
 import type { Logger } from "../logger.js";
+
+const pexecFile = promisify(execFile);
 
 // nut.js 的最小介面（不綁定選用相依的型別）。
 interface NutKeyboard {
@@ -25,8 +33,22 @@ interface NutModule {
 const SUPPORTED_PLATFORMS = new Set(["win32", "darwin", "linux"]);
 // 還原剪貼簿前的等待：讓目標視窗先完成貼上（部分程式的貼上是非同步）。
 const RESTORE_CLIPBOARD_DELAY_MS = 150;
+// 單筆貼上動作的逾時，避免 helper 卡住拖死佇列。
+const PASTE_TIMEOUT_MS = 5000;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+// wscript helper：對焦點視窗送 Ctrl+V（整串一次貼上）；引數 "1" 時，稍候再送 Enter（等貼上落地）。
+// SendKeys 只送固定按鍵（^v／{ENTER}），不逐字送條碼，故不會掉字、不需跳脫條碼內容。
+const PASTE_VBS = `Set sh = CreateObject("WScript.Shell")
+sh.SendKeys "^v"
+If WScript.Arguments.Count > 0 Then
+  If WScript.Arguments(0) = "1" Then
+    WScript.Sleep 80
+    sh.SendKeys "{ENTER}"
+  End If
+End If
+`;
 
 export class KeyboardEmulator {
   private mod: NutModule | null | undefined; // undefined=未嘗試載入, null=載入失敗
@@ -35,6 +57,10 @@ export class KeyboardEmulator {
   private primed = false;
   private pasteFallbackWarned = false;
   private queue: Promise<void> = Promise.resolve();
+  // Windows 貼上 helper 狀態：VBS 檔已寫入／已警告退回 nut.js。
+  private readonly vbsPath = join(tmpdir(), "wms-agent-paste.vbs");
+  private vbsReady = false;
+  private winFallbackWarned = false;
 
   constructor(
     private readonly log: Logger,
@@ -53,6 +79,17 @@ export class KeyboardEmulator {
 
   private async prime(): Promise<void> {
     if (this.primed) return;
+    // Windows：只需寫好 VBS helper（不載入 nut.js，避免其初始化的閃屏）；寫入失敗才退回 nut.js 預熱。
+    if (process.platform === "win32") {
+      try {
+        this.ensureVbs();
+        this.primed = true;
+        this.log.info("鍵盤模擬（貼上）已就緒，第一筆掃碼可即時輸入。");
+        return;
+      } catch (err) {
+        this.log.debug("貼上 helper 建立失敗，改預熱 nut.js：", err);
+      }
+    }
     const mod = await this.load();
     if (!mod) return;
     try {
@@ -106,6 +143,8 @@ export class KeyboardEmulator {
   }
 
   private async doSend(text: string): Promise<void> {
+    // Windows 主路徑：整串貼上（clip.exe＋Ctrl+V，不用 nut.js）；失敗才退到下方 nut.js。
+    if (process.platform === "win32" && (await this.pasteWin(text))) return;
     const mod = await this.load();
     if (!mod) return;
     // macOS 需「輔助使用」權限；首次送出時提示一次。
@@ -129,6 +168,45 @@ export class KeyboardEmulator {
       await mod.keyboard.releaseKey(mod.Key.Enter);
     }
     this.log.info(`（離線）以${pasted ? "貼上" : "鍵盤模擬"}輸入：${text}`);
+  }
+
+  /** 寫入貼上 VBS helper（每個行程一次，覆寫確保內容正確）。 */
+  private ensureVbs(): void {
+    if (this.vbsReady) return;
+    writeFileSync(this.vbsPath, PASTE_VBS, "utf8");
+    this.vbsReady = true;
+  }
+
+  /** 用 clip.exe 把條碼寫進剪貼簿（Windows 內建；stdin 逐字元寫入、不加尾端換行）。 */
+  private setClipboardWin(text: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const child = spawn("clip.exe", [], { windowsHide: true });
+      child.once("error", reject);
+      child.once("close", (code) => (code === 0 ? resolve() : reject(new Error(`clip.exe 結束碼 ${code}`))));
+      child.stdin.once("error", reject);
+      child.stdin.end(text, "utf8");
+    });
+  }
+
+  /** Windows 主路徑：設剪貼簿 → wscript 送 Ctrl+V 整串貼上（＋選用 Enter）。回傳是否成功（失敗退 nut.js）。 */
+  private async pasteWin(text: string): Promise<boolean> {
+    try {
+      this.ensureVbs();
+      await this.setClipboardWin(text);
+      // wscript 為無主控台 host（不閃視窗）；//B 靜默不彈錯誤框。引數 "1"/"0"＝貼上後是否補 Enter。
+      await pexecFile("wscript.exe", ["//B", "//Nologo", this.vbsPath, this.opts.pressEnter ? "1" : "0"], {
+        windowsHide: true,
+        timeout: PASTE_TIMEOUT_MS,
+      });
+      this.log.info(`（離線）以貼上輸入：${text}`);
+      return true;
+    } catch (err) {
+      if (!this.winFallbackWarned) {
+        this.winFallbackWarned = true;
+        this.log.warn("貼上送出失敗，退回 nut.js 鍵盤模擬：", err);
+      }
+      return false;
+    }
   }
 
   private pasteSupported(mod: NutModule): boolean {

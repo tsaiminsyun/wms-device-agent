@@ -162,6 +162,12 @@ async function main(): Promise<void> {
   });
   wsServer.attach(httpServer);
 
+  // 【重連關鍵】開序列埠前，先結束仍占用本埠的舊實例——它同時持有 COM 埠，
+  // 不先清掉的話新實例會卡在「Cannot lock port」。這保證「關掉再開」電子秤一定能重連。
+  if (await freePortIfOwnedByUs(config.server.port, log)) {
+    await delay(1000); // 等 OS 回收舊實例的控制代碼（含 COM 埠）
+  }
+
   // 訂閱先於裝置啟動（保險），再開始監聽。
   wsServer.start();
   trafficCop.start();
@@ -190,10 +196,11 @@ async function main(): Promise<void> {
     const watchdog = setTimeout(() => {
       log.warn("關閉逾時，強制結束以釋放埠。");
       process.exit(0);
-    }, 3000);
+    }, 4000);
     watchdog.unref();
     try {
-      await tray?.stop(); // 先收攤工作列 helper（等圖示消失，避免殘留幽靈圖示）
+      // 【順序關鍵】先釋放序列埠（電子秤 COM）——即使後續步驟卡住或看門狗逾時，埠也已乾淨關閉，
+      // 確保下次啟動能立即重連。再收網路，最後才收較慢且與埠無關的工作列 helper。
       trafficCop.stop();
       await deviceManager.stopAll();
       await wsServer.stop();
@@ -201,6 +208,7 @@ async function main(): Promise<void> {
       // 強制斷開殘留連線，否則 close() 會等所有連線結束、程序無法退出。
       if (typeof httpServer.closeAllConnections === "function") httpServer.closeAllConnections();
       await new Promise<void>((res) => httpServer.close(() => res()));
+      await tray?.stop(); // 工作列 helper 最後收（等圖示消失，避免殘留幽靈圖示）
     } catch (err) {
       log.error("關閉時發生錯誤：", err);
     } finally {
