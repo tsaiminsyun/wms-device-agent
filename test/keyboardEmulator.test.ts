@@ -65,7 +65,21 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// 測試需與執行平台無關：nut.js 路徑的測試固定成非 Windows（否則在 Windows 開發機上
+// 會先走 clip.exe/wscript 貼上主路徑而碰不到 nut.js）；Windows 貼上模式的測試另外固定 win32。
+function forcePlatform(value: string): void {
+  let orig: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    orig = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value, configurable: true });
+  });
+  afterEach(() => {
+    if (orig) Object.defineProperty(process, "platform", orig);
+  });
+}
+
 describe("KeyboardEmulator paste 模式", () => {
+  forcePlatform("linux");
   it("以剪貼簿貼上整串，且不逐字輸入", async () => {
     const kb = new KeyboardEmulator(log, { enabled: true, pressEnter: false, paste: true });
     kb.typeBarcode("8710033012345");
@@ -93,6 +107,7 @@ describe("KeyboardEmulator paste 模式", () => {
 });
 
 describe("KeyboardEmulator type 模式", () => {
+  forcePlatform("linux");
   it("paste=false 時逐字輸入，不動剪貼簿", async () => {
     const kb = new KeyboardEmulator(log, { enabled: true, pressEnter: false, paste: false });
     kb.typeBarcode("9900");
@@ -103,6 +118,7 @@ describe("KeyboardEmulator type 模式", () => {
 });
 
 describe("KeyboardEmulator 停用", () => {
+  forcePlatform("linux");
   it("enabled=false 時完全不送出", async () => {
     const kb = new KeyboardEmulator(log, { enabled: false, pressEnter: true, paste: true });
     kb.typeBarcode("NOPE");
@@ -113,14 +129,7 @@ describe("KeyboardEmulator 停用", () => {
 });
 
 describe("KeyboardEmulator Windows 貼上模式", () => {
-  let origPlatform: PropertyDescriptor | undefined;
-  beforeEach(() => {
-    origPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-  });
-  afterEach(() => {
-    if (origPlatform) Object.defineProperty(process, "platform", origPlatform);
-  });
+  forcePlatform("win32");
 
   const lastWscriptCall = () => {
     const call = execFileMock.mock.calls.at(-1) as unknown as [string, string[]];

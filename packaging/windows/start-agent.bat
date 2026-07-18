@@ -1,15 +1,14 @@
 @echo off
 rem ============================================================
-rem  Start wms-device-agent with a visible STATUS WINDOW.
+rem  Start wms-device-agent (same as double-clicking the exe).
 rem
-rem  The window shows the live log. Closing it with the X button
-rem  does NOT stop the agent - the agent keeps running in the
-rem  background with a system-tray icon (bottom-right, may be in
-rem  the "^" hidden-icons area). To fully quit: right-click the
-rem  tray icon -> "Exit". Double-clicking the exe does the same.
+rem  No window is shown - the agent runs silently with a
+rem  system-tray icon (bottom-right, may be in the "^" hidden-
+rem  icons area). Right-click the tray icon for:
+rem  Open Logs / Connection Status / Restart Service / Exit.
 rem
-rem    - Log file:  agent.log (this folder)
-rem    - Status:    http://127.0.0.1:8788/health
+rem    - Logs:    logs\wms-agent-YYYY-MM-DD.log (daily rolling)
+rem    - Status:  http://127.0.0.1:8788/health
 rem ============================================================
 cd /d "%~dp0"
-start "WMS Device Agent" "%~dp0wms-device-agent.exe"
+start "" "%~dp0wms-device-agent.exe"

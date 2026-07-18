@@ -58,6 +58,37 @@ describe("TrafficCop（交警模式仲裁，焦點認領）", () => {
     expect(typeBarcode).not.toHaveBeenCalled();
   });
 
+  it("無認領＋typist 在線 → 委派 typist 代打，不用本機鍵盤", () => {
+    const bus = new DeviceBus();
+    const { kb, typeBarcode } = fakeKeyboard(true);
+    const routeToTypist = vi.fn(() => 1); // 工作列元件收到
+    new TrafficCop(bus, mutedLog(), kb, () => false, vi.fn(() => 0), { keyboardFallback: true, routeToTypist }).start();
+
+    bus.emit("scan", scan("ABC"));
+    expect(routeToTypist).toHaveBeenCalledWith("ABC");
+    expect(typeBarcode).not.toHaveBeenCalled();
+  });
+
+  it("typist 送達 0（元件斷線）→ 退回本機鍵盤", () => {
+    const bus = new DeviceBus();
+    const { kb, typeBarcode } = fakeKeyboard(true);
+    const routeToTypist = vi.fn(() => 0);
+    new TrafficCop(bus, mutedLog(), kb, () => false, vi.fn(() => 0), { keyboardFallback: true, routeToTypist }).start();
+
+    bus.emit("scan", scan("ABC"));
+    expect(typeBarcode).toHaveBeenCalledWith("ABC");
+  });
+
+  it("typist 送達 0 且本機鍵盤停用（服務模式）→ 丟棄不崩潰", () => {
+    const bus = new DeviceBus();
+    const { kb, typeBarcode } = fakeKeyboard(false); // 服務模式：本機鍵盤停用
+    const routeToTypist = vi.fn(() => 0);
+    new TrafficCop(bus, mutedLog(), kb, () => false, vi.fn(() => 0), { keyboardFallback: true, routeToTypist }).start();
+
+    bus.emit("scan", scan("ABC"));
+    expect(typeBarcode).not.toHaveBeenCalled();
+  });
+
   it("stop() 後不再處理掃碼", () => {
     const bus = new DeviceBus();
     const { kb, typeBarcode } = fakeKeyboard(true);

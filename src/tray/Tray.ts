@@ -1,11 +1,10 @@
-// 系統匣圖示（僅 Windows）：背景代理的可見入口，選單提供「檢視 Log」與「結束程式」。
+// 系統匣圖示（僅 Windows）：可設定選單項目的通用底座；背景工作實例與 tray 元件共用。
 // 以 systray2（選用原生相依）建立；它另起原生 helper（tray_windows_release.exe）以 stdio 溝通。
 // 載入/建立失敗自動降級（不影響背景服務）。
 // 重要：systray2 的 init() 非同步——建構子回傳後 _process 仍為 null，故 onError/onClick/onExit
 // 必須等 ready() 完成後再掛，否則同步丟 TypeError、點擊事件沒被註冊（圖示出現但選單無反應）。
 
 import { nativeRequire } from "../runtime/nativeRequire.js";
-import { showStatusWindow } from "../runtime/detach.js";
 import { TRAY_ICON_ICO_BASE64 } from "./trayIcon.js";
 import type { Logger } from "../logger.js";
 
@@ -35,13 +34,15 @@ interface SysTrayInstance {
 }
 type SysTrayCtor = new (conf: SysTrayConf) => SysTrayInstance;
 
-const ITEM_LOGS = "開啟";
-const ITEM_EXIT = "結束";
+export interface TrayMenuItem {
+  title: string;
+  tooltip: string;
+  onClick: () => void;
+}
 
 export interface TrayOptions {
   version: string;
-  /** 使用者從選單選「結束」時呼叫（走既有的優雅關閉，並完全終止所有相關程序）。 */
-  onExit: () => void;
+  items: TrayMenuItem[];
 }
 
 export class Tray {
@@ -68,8 +69,10 @@ export class Tray {
     }
 
     // 保留選單項目物件參照：systray2 回傳的 action.item 即同一參照，以參照比對最穩，不受標題編碼影響。
-    const logsItem: SysTrayItem = { title: ITEM_LOGS, tooltip: "開啟狀態視窗（顯示即時 log）", enabled: true };
-    const exitItem: SysTrayItem = { title: ITEM_EXIT, tooltip: "完全結束程式（含狀態視窗與背景程序）", enabled: true };
+    const entries = this.opts.items.map((item) => ({
+      sys: { title: item.title, tooltip: item.tooltip, enabled: true } as SysTrayItem,
+      onClick: item.onClick,
+    }));
 
     let tray: SysTrayInstance;
     try {
@@ -79,9 +82,8 @@ export class Tray {
           title: "",
           tooltip: `WMS Device Agent v${this.opts.version}`,
           items: [
-            { title: `WMS Device Agent v${this.opts.version}`, tooltip: "背景執行中", enabled: false },
-            logsItem,
-            exitItem,
+            { title: `WMS Device Agent v${this.opts.version}`, tooltip: "執行中", enabled: false },
+            ...entries.map((e) => e.sys),
           ],
         },
         debug: false,
@@ -97,33 +99,31 @@ export class Tray {
       .ready()
       .then(async () => {
         tray.onError((err) => this.log.warn("工作列圖示錯誤：", err.message));
-        await tray.onClick((action) => this.onMenuClick(action, logsItem, exitItem));
-        this.log.info("工作列圖示已就緒（右鍵選單可檢視 Log 或結束程式）。");
+        await tray.onClick((action) => this.onMenuClick(action, entries));
+        this.log.info("工作列圖示已就緒。");
       })
       .catch((err) => this.log.warn("工作列圖示初始化失敗（不影響背景服務）：", err));
   }
 
-  private onMenuClick(action: SysTrayClickAction, logsItem: SysTrayItem, exitItem: SysTrayItem): void {
+  private onMenuClick(action: SysTrayClickAction, entries: { sys: SysTrayItem; onClick: () => void }[]): void {
     // 三重比對（參照為主、__id 與標題為輔）確保辨識點到哪一項；__id 需兩邊皆有值以免誤判。
     const item = action.item;
     const idMatch = (a?: number, b?: number): boolean => a !== undefined && a === b;
-    const isLogs = item === logsItem || idMatch(action.__id, logsItem.__id) || item?.title === ITEM_LOGS;
-    const isExit = item === exitItem || idMatch(action.__id, exitItem.__id) || item?.title === ITEM_EXIT;
-    if (isExit) {
-      this.log.info("使用者從工作列選擇「結束程式」。");
-      this.opts.onExit();
-    } else if (isLogs) {
-      this.log.info("使用者從工作列選擇「檢視 Log」。");
-      this.openLogs();
+    for (const e of entries) {
+      if (item === e.sys || idMatch(action.__id, e.sys.__id) || item?.title === e.sys.title) {
+        this.log.info(`使用者從工作列選擇「${e.sys.title}」。`);
+        try {
+          e.onClick();
+        } catch (err) {
+          this.log.warn(`工作列選單動作失敗（${e.sys.title}）：`, err);
+        }
+        return;
+      }
     }
   }
 
-  private openLogs(): void {
-    // 開狀態視窗顯示即時 log；背景實例仍在執行，故新實例只 tail 同一份 agent.log（見 showStatusWindow）。
-    void showStatusWindow(this.log);
-  }
-
-  /** 收攤 helper（exitNode=false：退出時機由主程式決定）。回傳 Promise 讓主程式先等圖示消失，避免殘留幽靈圖示。 */
+  /** 關閉時收攤 helper 程序（exitNode=false：由主程式自己決定退出時機）。
+   *  回傳 Promise，讓主程式可在真正 process.exit 前先等圖示消失，避免殘留幽靈圖示。 */
   async stop(): Promise<void> {
     if (!this.tray) return;
     const t = this.tray;

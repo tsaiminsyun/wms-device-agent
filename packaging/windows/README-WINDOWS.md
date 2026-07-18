@@ -7,56 +7,85 @@
 
 | 檔案 | 說明 |
 |---|---|
-| `wms-device-agent.exe` | 主程式（內含 Node.js 執行環境與應用程式碼） |
+| `wms-device-agent.exe` | 主程式（內含 Node.js 執行環境與應用程式碼）；**啟動不開任何視窗**，只在系統匣顯示圖示 |
 | `node_modules/` | 裝置原生模組（serialport / node-hid / nut.js）與工作列圖示 helper（systray2），**必須與 exe 放同一層** |
 | `config.json` | 設定檔（部署時修改，見下） |
-| `start-agent.bat` | 手動啟動：開啟**狀態視窗**（顯示即時 log）＋系統匣圖示 |
+| `start-agent.bat` | 手動啟動（同雙擊 exe；無視窗，只有系統匣圖示） |
 | `install-autostart.bat` | 註冊「登入時自動啟動」（無視窗，只有系統匣圖示）並立即啟動 |
 | `uninstall-autostart.bat` | 移除自動啟動並停止程式 |
 | `update-agent.bat` | 一鍵更新到新版（保留 `config.json`，見下方「更新版本」） |
 | `run-agent.bat` / `run-hidden.vbs` | 內部（自動啟動）用，**不用手動執行** |
+| `service-entry.cjs` / `run-tray-hidden.vbs` | 內部（Windows 服務／工作列元件）用，**不用手動執行** |
+| `logs/` | 每日輪替 log 檔（`wms-agent-YYYY-MM-DD.log`，保留 14 天；服務與工作列元件各寫一份） |
 
 ## 快速開始
 
 1. 把整個資料夾複製到固定位置（例 `C:\wms-device-agent\`）。**不要只複製 exe**——`node_modules` 與 `config.json` 必須跟著。
 2. 編輯 `config.json`：把正式 WMS 網址加進 `security.allowedOrigins`。
-3. 雙擊 `wms-device-agent.exe`（或 `start-agent.bat`）啟動——會開一個**狀態視窗**顯示即時 log，
-   同時在右下角**系統匣**出現**橘色包裹圖示**。
+3. 雙擊 `wms-device-agent.exe`（或 `start-agent.bat`）啟動——**不會開任何視窗**，
+   只在右下角**系統匣**出現**橘色包裹圖示**（看不到就按「^」展開隱藏的圖示）。
+   再次雙擊不會重複啟動（已在執行時直接靜默結束）。
 4. 瀏覽器開 `http://127.0.0.1:8788/health`，看到 `{"status":"ok",...}` 即成功。
-5. 要開機（登入）自動啟動：雙擊 `install-autostart.bat`（開機自動啟動時不開視窗，只有系統匣圖示）。
+5. 要開機（登入）自動啟動：雙擊 `install-autostart.bat`。
 
-> **按 X 不會關掉程式**：狀態視窗右上角的 X 只會關掉「視窗」——程式本體繼續在背景執行，
-> 圖示縮到系統匣（看不到就按「^」展開隱藏的圖示）。
+> **系統匣選單**（在包裹圖示上按右鍵）：
+> - 「**開啟 Log**」：開啟 `logs\` 資料夾（每日輪替 `wms-agent-YYYY-MM-DD.log`）。
+> - 「**連線狀態**」：以瀏覽器開啟 `http://127.0.0.1:8788/devices`（掃碼槍／電子秤即時狀態）。
+> - 「**重啟服務**」：優雅關閉（釋放序列埠）後自動重新啟動——裝置異常時的一鍵復原。
+> - 「**結束**」：**完全結束**（含背景實例與工作列 helper）並釋放序列埠；
+>   下次啟動自動重新偵測掃碼槍與電子秤，無需手動復原。結束時會清除本次的 `agent.log`。
 >
-> **系統匣選單**：在包裹圖示上按右鍵——
-> 「**檢視 Log (View Logs)**」會**啟動一個狀態視窗**（即 `wms-device-agent.exe`）顯示即時 log；
-> 背景實例仍在執行，所以它只會 tail 同一份 `agent.log`，不會重複啟動背景服務。
-> 「**結束程式 (Exit)**」會**完全結束**（關閉狀態視窗、背景實例與工作列 helper 等所有相關程序）並釋放序列埠，
-> 下次啟動即自動重新偵測掃碼槍與電子秤，無需任何手動復原。
-> 結束時會**清除本次的 log 檔**（`agent.log` 等）；若某個檔仍被占用而當下刪不掉，下次啟動前也會再清一次，
-> 因此每次重新啟動都是乾淨的 log。
->
-> （進階：設環境變數 `WMS_NO_DETACH=1` 可停用「視窗／背景分離」，回到傳統單行程行為。）
+> （進階：設環境變數 `WMS_NO_DETACH=1` 可停用「啟動器／背景實例分離」，回到單行程直跑。）
 
 > **SmartScreen 提示**：exe 未簽章（由官方 node.exe 注入程式產生），首次執行 Windows 可能跳出
 > 「Windows 已保護您的電腦」——點「其他資訊」→「仍要執行」。
 
-## 自動啟動的設計
+## Windows 服務版（建議：用安裝程式部署）
+
+`wms-device-agent-setup.exe`（Inno Setup 安裝程式）會自動完成整套部署：
+
+1. 檔案安裝到 `C:\Program Files\WMS Device Agent\`（升級時**保留現有 `config.json`**）。
+2. 註冊 **Windows 服務 `WMSDeviceAgent`**（node-windows/winsw）：**開機自動啟動**（不必等使用者登入）、
+   服務異常結束時 **SCM 自動重啟**（5s/10s/60s，每日歸零），並授權一般使用者啟停服務（重啟服務免 UAC）。
+3. 寫入 HKLM Run 機碼：**每位使用者登入時自動啟動工作列元件**（`wms-device-agent.exe --tray`，
+   經 `wscript` 隱藏啟動，**完全沒有主控台視窗**）。
+
+服務模式下**沒有任何視窗**，所有狀態與錯誤都寫進 `logs\wms-agent-YYYY-MM-DD.log`（每日輪替、保留 14 天）。
+
+**工作列元件選單**（右下角包裹圖示按右鍵）：
+- 「**開啟 Log**」：開啟 `logs\` 資料夾（每日輪替 log 檔）。
+- 「**連線狀態**」：以瀏覽器開啟 `http://127.0.0.1:8788/devices`（掃碼槍／電子秤即時連線狀態）。
+- 「**重啟服務**」：重新啟動 `WMSDeviceAgent` 服務（裝置異常時的一鍵復原；安裝時已授權，不跳 UAC）。
+- 「**關閉圖示**」：只關閉圖示；服務仍在背景執行。
+
+**鍵盤模擬的去向**：服務跑在 session 0，打不進使用者桌面——離線掃碼的鍵盤輸入改由**工作列元件**
+在使用者桌面代打（服務經 WebSocket 把條碼委派給它，斷線自動重連）。因此**要用鍵盤模擬就必須讓
+工作列元件在登入後執行**（安裝程式已設好）。掃碼槍拔插／斷線由服務自動重試偵測，不會造成服務結束。
+
+**手動控制**：`sc stop WMSDeviceAgent`／`sc start WMSDeviceAgent`；
+解除安裝（控制台移除程式）會自動停止並移除服務。
+（進階：`wms-device-agent.exe --install-service`／`--uninstall-service` 可手動註冊/解除，需系統管理員。）
+
+**編譯安裝程式**（開發機）：先 `pnpm package:win` 產生 `dist-win/wms-device-agent/`，
+再於 Windows 用 [Inno Setup 6](https://jrsoftware.org/isinfo.php) 編譯：
+`iscc /DMyAppVersion=<版本> packaging\windows\installer.iss` → `dist-win\wms-device-agent-setup.exe`。
+
+## 自動啟動的設計（免安裝 zip 版）
 
 `install-autostart.bat` 建立的是**使用者登入時**的排程工作（Task Scheduler，隱藏視窗），
-而不是 Windows 服務。這是刻意的：**鍵盤模擬退路需要在使用者桌面工作階段執行**，
-Windows 服務（session 0）打不進使用者的視窗。若不需要鍵盤退路、只走 WS，
-才可考慮用 [nssm](https://nssm.cc/) 包成服務。
+而不是 Windows 服務：單行程模式下**鍵盤模擬退路需要在使用者桌面工作階段執行**，
+Windows 服務（session 0）打不進使用者的視窗。需要「開機即啟動、不等登入」時，
+請改用上方的**安裝程式（服務版）**——它以「服務＋工作列元件」拆開解決了鍵盤模擬的限制。
 
 ## 常用操作
 
 | 動作 | 方式 |
 |---|---|
-| 手動啟動／看狀態 | 雙擊 `wms-device-agent.exe`（已在執行時只會再開一個狀態視窗，不會重複啟動） |
-| 關閉狀態視窗 | 按視窗右上角 X（程式繼續在背景執行，系統匣圖示還在） |
-| 停止 | **系統匣圖示按右鍵 →「結束程式 (Exit)」**（正常關閉方式）。不得已才用工作管理員結束 `wms-device-agent.exe` |
-| 看 log | 開 `agent.log`。預設只記錄四類重點：啟動、裝置初始化（電子秤／掃碼槍 CDC／HID）、掃到的條碼值、改走鍵盤模擬。**需要完整診斷 log（含錯誤與警告）時**把 `config.json` 的 `logLevel` 改成 `"debug"` 後重啟 |
-| 查裝置狀態 | 瀏覽器開 `http://127.0.0.1:8788/devices` |
+| 手動啟動 | 雙擊 `wms-device-agent.exe`（無視窗；已在執行時不會重複啟動） |
+| 停止 | **系統匣圖示按右鍵 →「結束」**（正常關閉方式）。不得已才用工作管理員結束 `wms-device-agent.exe` |
+| 重啟（裝置異常） | 系統匣 →「**重啟服務**」（釋放序列埠後自動重新啟動） |
+| 看 log | 系統匣 →「**開啟 Log**」：`logs\wms-agent-YYYY-MM-DD.log`（每日輪替、保留 14 天；**錯誤與警告一律寫入**）。預設精選模式只記四類重點：啟動、裝置初始化、條碼值、改走鍵盤模擬；要完整診斷 log 把 `config.json` 的 `logLevel` 改成 `"debug"` 後重啟 |
+| 查裝置狀態 | 系統匣 →「**連線狀態**」（或瀏覽器開 `http://127.0.0.1:8788/devices`） |
 | 升級版本 | 用 `update-agent.bat`（見下方「更新版本」），不要手動覆蓋 |
 
 ## 更新版本

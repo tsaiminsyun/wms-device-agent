@@ -56,10 +56,11 @@ if [ ! -f "$CACHE/$ZIP" ]; then
 fi
 unzip -jo "$CACHE/$ZIP" "node-${NODE_VERSION}-win-x64/node.exe" -d "$BUILD" > /dev/null
 
-echo "==> [4/6] postject：把 blob 注入 exe"
+echo "==> [4/6] postject：把 blob 注入 exe，並把 PE Subsystem 改為 GUI（雙擊不開任何視窗）"
 cp "$BUILD/node.exe" "$DIST/wms-device-agent.exe"
 pnpm exec postject "$DIST/wms-device-agent.exe" NODE_SEA_BLOB "$BUILD/sea-prep.blob" \
   --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2
+"$NODE_BIN" "$WIN_DIR/set-gui-subsystem.cjs" "$DIST/wms-device-agent.exe"
 
 echo "==> [5/6] npm：安裝 Windows 版原生相依（--os=win32 --cpu=x64）"
 NATIVE="$WIN_DIR/native-deps"
@@ -87,12 +88,14 @@ check "$DIST/node_modules/@serialport/bindings-cpp/prebuilds/win32-x64/*.node"
 check "$DIST/node_modules/node-hid/prebuilds/HID-win32-x64/*.node"
 check "$DIST/node_modules/@nut-tree-fork/libnut-win32/build/Release/*.node"
 check "$DIST/node_modules/systray2/traybin/tray_windows_release.exe"
+check "$DIST/node_modules/node-windows/package.json"
 
 echo "==> [6/6] 組裝發佈資料夾與 zip"
 cp "$ROOT/config.example.json" "$DIST/config.json"
 cp "$WIN_DIR/start-agent.bat" "$WIN_DIR/run-agent.bat" \
    "$WIN_DIR/install-autostart.bat" "$WIN_DIR/uninstall-autostart.bat" "$WIN_DIR/update-agent.bat" \
-   "$WIN_DIR/run-hidden.vbs" "$WIN_DIR/README-WINDOWS.md" "$DIST/"
+   "$WIN_DIR/run-hidden.vbs" "$WIN_DIR/run-tray-hidden.vbs" "$WIN_DIR/service-entry.cjs" \
+   "$WIN_DIR/README-WINDOWS.md" "$DIST/"
 
 OUT_ZIP="$ROOT/${PKG_DIR}.zip"
 rm -f "${OUT_ZIP}"
@@ -105,3 +108,7 @@ echo "完成："
 echo "  資料夾：${DIST}"
 echo "  壓縮檔：${OUT_ZIP}（$(du -h "${OUT_ZIP}" | cut -f1 | tr -d ' ')；解壓為單一資料夾 ${PKG_DIR}/）"
 echo "  exe   ：$(du -h "$DIST/wms-device-agent.exe" | cut -f1 | tr -d ' ')（Node ${NODE_VERSION} win-x64 + app bundle）"
+echo ""
+echo "安裝程式（Windows 服務版）：於 Windows 以 Inno Setup 6 編譯——"
+echo "  iscc /DMyAppVersion=${PKG_VERSION} packaging\\windows\\installer.iss"
+echo "  產出 dist-win/wms-device-agent-setup.exe（自動註冊服務＋工作列元件自啟動）"

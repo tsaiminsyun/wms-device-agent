@@ -28,7 +28,7 @@ vi.mock("node:fs", () => ({
   unlinkSync: unlinkSyncMock,
 }));
 
-import { runWindowsLauncherIfNeeded, killRelatedProcesses, showStatusWindow, cleanupLogFiles } from "../src/runtime/detach";
+import { runWindowsLauncherIfNeeded, killRelatedProcesses, openWithShell, cleanupLogFiles } from "../src/runtime/detach";
 
 const HEALTH = "http://127.0.0.1:8788/health";
 let origPlatform: PropertyDescriptor | undefined;
@@ -59,7 +59,7 @@ afterEach(() => {
 });
 
 describe("runWindowsLauncherIfNeeded", () => {
-  it("前台模式：未在執行 → spawn 背景工作實例（detached＋隱藏＋WORKER 旗標）並回傳 true", async () => {
+  it("啟動器：未在執行 → spawn 背景工作實例（detached＋隱藏＋WORKER 旗標）並回傳 true（不開視窗）", async () => {
     const isLauncher = await runWindowsLauncherIfNeeded(HEALTH);
     expect(isLauncher).toBe(true);
     expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -71,7 +71,7 @@ describe("runWindowsLauncherIfNeeded", () => {
     expect((opts.env as Record<string, string>).WMS_AGENT_WORKER).toBe("1");
   });
 
-  it("已在執行（health 回 200）→ 不再 spawn，只當狀態視窗", async () => {
+  it("已在執行（health 回 200）→ 不再 spawn（不重複啟動），靜默結束", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
     const isLauncher = await runWindowsLauncherIfNeeded(HEALTH);
     expect(isLauncher).toBe(true);
@@ -131,38 +131,27 @@ describe("killRelatedProcesses", () => {
   });
 });
 
-describe("showStatusWindow", () => {
+describe("openWithShell（開啟 Log 資料夾／連線狀態頁）", () => {
   const mkLog = () => ({ info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), child() { return this; } } as never);
 
-  it("直接以 cmd start 啟動 wms-device-agent.exe 當狀態視窗（清掉 WORKER 旗標，不依賴 PowerShell）", async () => {
-    process.env.WMS_AGENT_WORKER = "1"; // 模擬本行程是背景工作實例
-    await showStatusWindow(mkLog());
-    // 不再用 PowerShell 找回既有視窗（企業機器常封鎖 PowerShell）
-    const psCall = execFileMock.mock.calls.find((c) => (c as unknown as [string])[0] === "powershell");
-    expect(psCall).toBeFalsy();
-    // 一律啟動一個新的 exe 狀態視窗實例
+  it("以 explorer.exe 開啟目標（不經 cmd，不閃主控台）", () => {
+    openWithShell("C:\\app\\logs", mkLog());
     expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [cmd, args, opts] = spawnMock.mock.calls[0] as unknown as [string, string[], Record<string, unknown>];
-    expect(cmd).toBe("cmd");
-    expect(args[0]).toBe("/c");
-    expect(args[1]).toBe("start");
-    expect(args).toContain(process.execPath);
-    // 新視窗實例不可帶 WORKER 旗標，否則會被當成背景實例、搶埠
-    expect((opts.env as Record<string, string>).WMS_AGENT_WORKER).toBeUndefined();
+    const [cmd, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(cmd).toBe("explorer.exe");
+    expect(args).toEqual(["C:\\app\\logs"]);
   });
 
-  it("非 Windows → 什麼都不做", async () => {
+  it("URL 也交給 explorer（開預設瀏覽器）", () => {
+    openWithShell("http://127.0.0.1:8788/devices", mkLog());
+    const [, args] = spawnMock.mock.calls[0] as unknown as [string, string[]];
+    expect(args).toEqual(["http://127.0.0.1:8788/devices"]);
+  });
+
+  it("非 Windows → 什麼都不做", () => {
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
-    await showStatusWindow(mkLog());
-    expect(execFileMock).not.toHaveBeenCalled();
+    openWithShell("x", mkLog());
     expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it("開新狀態視窗時不可設 windowsHide（否則視窗會被隱藏）", async () => {
-    await showStatusWindow(mkLog());
-    const [, , opts] = spawnMock.mock.calls[0] as unknown as [string, string[], Record<string, unknown>];
-    expect(opts.windowsHide).toBeUndefined();
-    expect(opts.detached).toBeUndefined();
   });
 });
 
