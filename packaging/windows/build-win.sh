@@ -56,6 +56,14 @@ if [ ! -f "$CACHE/$ZIP" ]; then
 fi
 unzip -jo "$CACHE/$ZIP" "node-${NODE_VERSION}-win-x64/node.exe" -d "$BUILD" > /dev/null
 
+echo "==> 取得 NSSM（Windows 服務管理器，快取：packaging/.cache）"
+NSSM_ZIP="nssm-2.24.zip"
+if [ ! -f "$CACHE/$NSSM_ZIP" ]; then
+  curl -fL --retry 3 "https://nssm.cc/release/$NSSM_ZIP" -o "$CACHE/$NSSM_ZIP.tmp"
+  mv "$CACHE/$NSSM_ZIP.tmp" "$CACHE/$NSSM_ZIP"
+fi
+unzip -jo "$CACHE/$NSSM_ZIP" "nssm-2.24/win64/nssm.exe" -d "$DIST" > /dev/null
+
 echo "==> [4/6] postject：把 blob 注入 exe，並把 PE Subsystem 改為 GUI（雙擊不開任何視窗）"
 cp "$BUILD/node.exe" "$DIST/wms-device-agent.exe"
 pnpm exec postject "$DIST/wms-device-agent.exe" NODE_SEA_BLOB "$BUILD/sea-prep.blob" \
@@ -88,13 +96,13 @@ check "$DIST/node_modules/@serialport/bindings-cpp/prebuilds/win32-x64/*.node"
 check "$DIST/node_modules/node-hid/prebuilds/HID-win32-x64/*.node"
 check "$DIST/node_modules/@nut-tree-fork/libnut-win32/build/Release/*.node"
 check "$DIST/node_modules/systray2/traybin/tray_windows_release.exe"
-check "$DIST/node_modules/node-windows/package.json"
+check "$DIST/nssm.exe"
 
 echo "==> [6/6] 組裝發佈資料夾與 zip"
 cp "$ROOT/config.example.json" "$DIST/config.json"
 cp "$WIN_DIR/start-agent.bat" "$WIN_DIR/run-agent.bat" \
    "$WIN_DIR/install-autostart.bat" "$WIN_DIR/uninstall-autostart.bat" "$WIN_DIR/update-agent.bat" \
-   "$WIN_DIR/run-hidden.vbs" "$WIN_DIR/run-tray-hidden.vbs" "$WIN_DIR/service-entry.cjs" \
+   "$WIN_DIR/run-hidden.vbs" "$WIN_DIR/run-tray-hidden.vbs" \
    "$WIN_DIR/README-WINDOWS.md" "$DIST/"
 
 OUT_ZIP="$ROOT/${PKG_DIR}.zip"

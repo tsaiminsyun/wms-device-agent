@@ -20,6 +20,8 @@ export interface SerialPortInstance {
   on(event: "close", cb: () => void): void;
   removeAllListeners(event?: string): void;
   close(cb?: (err?: Error | null) => void): void;
+  // 清除未完成 I/O（Windows：PurgeComm 中止 pending overlapped read）；close() 前呼叫可避免卡住。
+  flush?(cb?: (err?: Error | null) => void): void;
 }
 
 export interface SerialPortCtor {

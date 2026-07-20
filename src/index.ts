@@ -98,7 +98,7 @@ async function main(): Promise<void> {
   }
 
   // Windows 打包版分流：本行程可能只是靜默啟動器（不開視窗），代理本體在脫離主控台的背景實例執行（見 detach.ts）。
-  // 服務模式不分流：SCM/winsw 直接管本行程，單行程直跑。
+  // 服務模式不分流：SCM/NSSM 直接管本行程，單行程直跑。
   if (mode !== "service" && (await runWindowsLauncherIfNeeded(`http://${config.server.host}:${config.server.port}/health`))) {
     return; // tail interval 會讓事件迴圈存活；視窗被關掉時本行程自然結束
   }
@@ -184,6 +184,8 @@ async function main(): Promise<void> {
     { keyboardFallback: config.scanner.keyboardFallback, routeToTypist: (barcode) => wsServer.broadcastKbd(barcode) },
   );
 
+  // /shutdown 的回呼在 shutdown 定義後才接上（見下）。
+  let requestShutdown: (() => void) | null = null;
   const httpServer = createApiServer({
     log,
     agentInfo,
@@ -192,6 +194,7 @@ async function main(): Promise<void> {
     claimingClientCount: () => wsServer.claimingCount(),
     security: config.security,
     startedAt: Date.now(),
+    onShutdownRequest: () => requestShutdown?.(),
   });
   wsServer.attach(httpServer);
 
@@ -236,7 +239,9 @@ async function main(): Promise<void> {
       // 【順序關鍵】先釋放序列埠（電子秤 COM）——即使後續步驟卡住或看門狗逾時，埠也已乾淨關閉，
       // 確保下次啟動能立即重連。再收網路，最後才收較慢且與埠無關的工作列 helper。
       trafficCop.stop();
+      log.info("正在關閉序列埠與裝置驅動…");
       await deviceManager.stopAll();
+      log.info("裝置驅動已停止，序列埠已全數釋放。");
       await wsServer.stop();
       wsServer.detach(httpServer);
       // 強制斷開殘留連線，否則 close() 會等所有連線結束、程序無法退出。
@@ -276,6 +281,8 @@ async function main(): Promise<void> {
       process.exit(0);
     }
   };
+  // 新實例接手（POST /shutdown）：與「重啟服務」相同的優雅關閉，乾淨釋放 COM 後退出。
+  requestShutdown = () => void shutdown("HTTP 關閉請求（新實例接手）");
   // 關閉訊號（SIGBREAK 僅 Windows）。
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

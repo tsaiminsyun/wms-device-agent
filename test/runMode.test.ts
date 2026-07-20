@@ -18,7 +18,7 @@ describe("getRunMode", () => {
     expect(getRunMode()).toBe("default");
   });
 
-  it("WMS_RUN_MODE=service（node-windows 服務環境變數）→ service", () => {
+  it("WMS_RUN_MODE=service（NSSM 服務環境變數）→ service", () => {
     process.argv = ["node", "index.js"];
     process.env.WMS_RUN_MODE = "service";
     expect(getRunMode()).toBe("service");

@@ -5,8 +5,8 @@
 ;
 ; 安裝內容：
 ;   1. 檔案複製到 {app}（config.json 只在首次安裝寫入，升級不覆蓋）。
-;   2. 註冊 Windows 服務（wms-device-agent.exe --install-service，node-windows/winsw）：
-;      開機自動啟動、異常自動重啟（SCM 復原設定）、授權一般使用者啟停（工作列「重啟服務」免 UAC）。
+;   2. 註冊 Windows 服務（wms-device-agent.exe --install-service，NSSM／隨附 nssm.exe）：
+;      開機自動啟動、異常自動重啟（NSSM＋SCM 復原設定）、授權一般使用者啟停（工作列「重啟服務」免 UAC）。
 ;   3. HKLM Run 機碼：每位使用者登入自動啟動工作列元件（--tray，經 wscript 隱藏、無主控台視窗）。
 ;   4. log 寫入 {app}\logs（安裝時開放 Users 修改權限；每日輪替 wms-agent-YYYY-MM-DD.log）。
 

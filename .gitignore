@@ -13,5 +13,4 @@ dist-win/
 packaging/.cache/
 packaging/windows/native-deps/node_modules/
 packaging/windows/native-deps/package-lock.json
-*-win-x64.zip
 wms-device-agent.zip

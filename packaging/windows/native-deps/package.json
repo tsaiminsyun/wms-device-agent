@@ -6,7 +6,6 @@
   "dependencies": {
     "@nut-tree-fork/nut-js": "4.2.6",
     "node-hid": "3.3.0",
-    "node-windows": "1.0.0-beta.8",
     "serialport": "12.0.0",
     "systray2": "2.1.4"
   }

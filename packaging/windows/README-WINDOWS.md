@@ -15,7 +15,7 @@
 | `uninstall-autostart.bat` | 移除自動啟動並停止程式 |
 | `update-agent.bat` | 一鍵更新到新版（保留 `config.json`，見下方「更新版本」） |
 | `run-agent.bat` / `run-hidden.vbs` | 內部（自動啟動）用，**不用手動執行** |
-| `service-entry.cjs` / `run-tray-hidden.vbs` | 內部（Windows 服務／工作列元件）用，**不用手動執行** |
+| `nssm.exe` / `run-tray-hidden.vbs` | 內部（Windows 服務管理器 NSSM／工作列元件）用，**不用手動執行** |
 | `logs/` | 每日輪替 log 檔（`wms-agent-YYYY-MM-DD.log`，保留 14 天；服務與工作列元件各寫一份） |
 
 ## 快速開始
@@ -45,8 +45,8 @@
 `wms-device-agent-setup.exe`（Inno Setup 安裝程式）會自動完成整套部署：
 
 1. 檔案安裝到 `C:\Program Files\WMS Device Agent\`（升級時**保留現有 `config.json`**）。
-2. 註冊 **Windows 服務 `WMSDeviceAgent`**（node-windows/winsw）：**開機自動啟動**（不必等使用者登入）、
-   服務異常結束時 **SCM 自動重啟**（5s/10s/60s，每日歸零），並授權一般使用者啟停服務（重啟服務免 UAC）。
+2. 以 **NSSM**（隨附 `nssm.exe`）註冊 **Windows 服務 `WMSDeviceAgent`**：**開機自動啟動**（不必等使用者登入）、
+   代理異常結束時 **NSSM 自動重啟**（節流 5s），並加上 **SCM 復原設定**與一般使用者啟停授權（重啟服務免 UAC）。
 3. 寫入 HKLM Run 機碼：**每位使用者登入時自動啟動工作列元件**（`wms-device-agent.exe --tray`，
    經 `wscript` 隱藏啟動，**完全沒有主控台視窗**）。
 
@@ -102,10 +102,11 @@ Windows 服務（session 0）打不進使用者的視窗。需要「開機即啟
 
 | 症狀 | 解法 |
 |---|---|
-| 啟動後馬上結束 | 看 `agent.log`：多半是 `config.json` 格式錯誤（訊息會列出欄位）。8788 埠被占用時會自動重試並「接管」殘留的舊實例（強制結束仍占用埠的另一個 `wms-device-agent.exe`），無需手動處理。 |
-| 重啟後埠一直被占用 | 新版已在啟動時自動結束殘留的舊實例並接手（連同其卡住的序列埠一併釋放）。若仍發生，代表占用者不是本程式——`agent.log` 會指出占用埠的 PID。 |
+| 啟動後馬上結束 | 看 `agent.log`：多半是 `config.json` 格式錯誤（訊息會列出欄位）。8788 埠被占用時會自動「接管」舊實例：先請它優雅關閉（乾淨釋放 COM 埠），逾時才強制結束，無需手動處理。 |
+| 重啟後埠一直被占用 | 新版啟動時會自動接手殘留的舊實例（優雅關閉優先，序列埠一併乾淨釋放）。若仍發生，代表占用者不是本程式——`agent.log` 會指出占用埠的 PID。 |
 | log 出現「無法載入 serialport / node-hid / nut.js」 | `node_modules` 沒跟著 exe 一起搬，或被防毒隔離。整個資料夾重新解壓。 |
 | 掃碼槍/電子秤沒反應 | 見專案 README 的「掃碼槍」「電子秤」「疑難排解」章節（模式設定、VID、`Cannot lock port`）。 |
+| 重啟程式後電子秤連不上（log 出現 `SetCommState` 錯誤） | CH340 驅動卡死。程式會自動重啟該 USB 裝置（等同重插；**服務版**以 SYSTEM 執行可自動復原）。手動啟動（zip 版）無管理員權限時，依 log 提示重插 USB 即可恢復。 |
 | 無認領時掃碼沒打字 | 確認程式是以登入使用者身分執行（不是服務/SYSTEM）；`config.json` 的 `keyboard.enabled` 為 `true`。 |
 | 防火牆詢問 | 程式只綁 `127.0.0.1`（本機），不需對外開放；拒絕入站規則也能正常運作。 |
 

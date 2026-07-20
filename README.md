@@ -347,6 +347,7 @@ pnpm package:win   # 產出 dist-win/ 與 wms-device-agent-<版本>-win-x64.zip
 |---|---|
 | 一直顯示「序列裝置（待辨識）」 | 沒收到帶指紋的資料：秤沒開機/沒送資料、`baudRate` 不符、或協定格式不同。 |
 | 沒偵測到 | 晶片 VID 不在 `scale.vendorIds`；可加 VID 或設 `[]` 接受所有非掃碼槍序列埠。 |
+| 重啟程式後連不上（log 出現 `SetCommState` 錯誤） | CH340 驅動卡死（Windows error 31，非「埠被占用」）。連續 3 次失敗會自動以 `pnputil` 重啟該 USB 裝置（軟體重插；需管理員權限，服務版 SYSTEM 可用）；無權限時依提示手動重插。 |
 | 讀數跳動 | 正常：不穩時 `stable:false` 持續更新，穩定判定交前端用 `stable` 欄位。 |
 
 ### 鍵盤退路 / WebSocket

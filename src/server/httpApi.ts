@@ -1,4 +1,4 @@
-// HTTP 狀態 API（與 WS 共用埠）：GET /health、/devices、/。
+// HTTP 狀態 API（與 WS 共用埠）：GET /health、/devices、/；POST /shutdown（新實例接手用）。
 // Origin 不在白名單一律 403；CORS 標頭只回給白名單 Origin。
 
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
@@ -17,6 +17,8 @@ export interface HttpApiDeps {
   security: OriginPolicy;
   /** 啟動時間（epoch ms），算 uptime 用。 */
   startedAt: number;
+  /** 優雅關閉請求（POST /shutdown）：新實例接手時呼叫，讓本實例乾淨釋放序列埠後退出。 */
+  onShutdownRequest(): void;
 }
 
 export function createApiServer(deps: HttpApiDeps): HttpServer {
@@ -37,6 +39,15 @@ function handle(req: IncomingMessage, res: ServerResponse, deps: HttpApiDeps): v
 
   const method = req.method ?? "GET";
   const pathname = (req.url ?? "/").split("?")[0];
+
+  // 優雅關閉（新實例接手用）：只接受本機非瀏覽器來源——帶 Origin（瀏覽器跨源）一律拒絕；
+  // 不走 Origin 白名單閘門（呼叫端是本程式，無 Origin）。伺服器只綁 127.0.0.1，外部打不到。
+  if (pathname === "/shutdown" && method === "POST") {
+    if (origin) return sendJson(res, 403, { error: "browser-origin-forbidden" });
+    sendJson(res, 202, { status: "shutting-down" });
+    deps.onShutdownRequest();
+    return;
+  }
 
   // 不在白名單一律擋下，所有路由一致。
   if (!allowed) {

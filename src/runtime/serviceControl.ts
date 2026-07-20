@@ -1,7 +1,6 @@
-// Windows 服務註冊/控制（node-windows/winsw）：--install-service / --uninstall-service 由安裝程式
-// （Inno Setup，以系統管理員權限）呼叫。服務以 WMS_RUN_MODE=service 執行本 exe（見 runMode.ts）。
-// 註：winsw XML 的 executable＝安裝當下的 process.execPath＝本 SEA exe；exe 會忽略 wrapper.js
-// 引數、直接跑內嵌 bundle，故服務子行程就是代理本體。自動重啟由 SCM 復原設定（sc failure）保證。
+// Windows 服務註冊/控制（NSSM）：--install-service / --uninstall-service 由安裝程式
+// （Inno Setup，以系統管理員權限）呼叫。NSSM 以 WMS_RUN_MODE=service 執行本 SEA exe（見 runMode.ts），
+// 故服務子行程就是代理本體。異常自動重啟由 NSSM（AppExit Restart）與 SCM 復原設定（sc failure）雙層保證。
 
 import { execFile, spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -9,12 +8,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
-import { isSeaBuild, nativeRequire } from "./nativeRequire.js";
+import { isSeaBuild } from "./nativeRequire.js";
 import type { Logger } from "../logger.js";
 
 const pexec = promisify(execFile);
 
-/** Windows 服務名稱（sc 指令用；不含空白，node-windows 的 id 正規化後大小寫不敏感相符）。 */
+/** Windows 服務名稱（NSSM 與 sc 指令共用；不含空白）。 */
 export const SERVICE_NAME = "WMSDeviceAgent";
 
 const INSTALL_TIMEOUT_MS = 60_000;
@@ -25,37 +24,18 @@ const SERVICE_SDDL =
   "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)" +
   "(A;;CCLCSWRPWPLORC;;;AU)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)";
 
-// node-windows 最小介面（選用相依，僅打包版使用）。
-interface NwService {
-  on(event: string, cb: (...args: unknown[]) => void): void;
-  install(): void;
-  uninstall(): void;
-  start(): void;
-}
-interface NwModule {
-  Service: new (cfg: {
-    name: string;
-    description: string;
-    script: string;
-    workingDirectory: string;
-    env: { name: string; value: string }[];
-  }) => NwService;
+/** 隨 exe 出貨的 nssm.exe 路徑（與 exe 同層，由 build-win.sh 放入）。 */
+function nssmPath(): string {
+  return join(dirname(process.execPath), "nssm.exe");
 }
 
-function makeService(): NwService {
-  const mod = nativeRequire("node-windows") as NwModule;
-  const exeDir = dirname(process.execPath);
-  return new mod.Service({
-    name: SERVICE_NAME,
-    description: "WMS 裝置代理：掃碼槍／電子秤 → 本機 WebSocket/HTTP；異常自動重啟。",
-    // winsw 需要一個存在的 script 檔；實際執行的是 SEA exe（會忽略此引數），本檔永不被載入。
-    script: join(exeDir, "service-entry.cjs"),
-    workingDirectory: exeDir,
-    env: [
-      { name: "WMS_RUN_MODE", value: "service" },
-      { name: "WMS_NO_DETACH", value: "1" },
-    ],
-  });
+/** 執行一個 nssm 子指令；ignoreError=true 時吞掉錯誤（用於冪等的 stop/remove）。 */
+async function nssm(args: string[], ignoreError = false): Promise<void> {
+  try {
+    await pexec(nssmPath(), args, { windowsHide: true, timeout: INSTALL_TIMEOUT_MS });
+  } catch (err) {
+    if (!ignoreError) throw err;
+  }
 }
 
 function assertSea(): void {
@@ -64,55 +44,38 @@ function assertSea(): void {
   }
 }
 
-/** 註冊 Windows 服務並啟動；已存在則視為成功。接著套用 SCM 自動重啟與使用者啟停授權。 */
+/** 用 NSSM 註冊 Windows 服務並啟動（冪等：先移除舊設定）。接著套用 SCM 自動重啟與使用者啟停授權。 */
 export async function installService(log: Logger): Promise<void> {
   assertSea();
   log.notice(`註冊 Windows 服務 ${SERVICE_NAME}…`);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("服務註冊逾時")), INSTALL_TIMEOUT_MS);
-    const svc = makeService();
-    const done = (): void => {
-      clearTimeout(timer);
-      resolve();
-    };
-    svc.on("install", () => {
-      svc.start();
-      done();
-    });
-    svc.on("alreadyinstalled", done);
-    svc.on("invalidinstallation", () => {
-      clearTimeout(timer);
-      reject(new Error("服務安裝狀態異常（daemon 檔案不完整），請先解除安裝再重新安裝"));
-    });
-    svc.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err instanceof Error ? err : new Error(String(err)));
-    });
-    svc.install();
-  });
+  const exe = process.execPath;
+  const exeDir = dirname(exe);
+  // 冪等：若已存在先停掉並移除，確保設定乾淨。
+  await nssm(["stop", SERVICE_NAME], true);
+  await nssm(["remove", SERVICE_NAME, "confirm"], true);
+  // NSSM 直接以本 SEA exe 為服務程式（無引數；服務角色由下方環境變數決定，見 runMode.ts）。
+  await nssm(["install", SERVICE_NAME, exe]);
+  await nssm(["set", SERVICE_NAME, "AppDirectory", exeDir]);
+  await nssm(["set", SERVICE_NAME, "DisplayName", "WMS Device Agent"]);
+  await nssm(["set", SERVICE_NAME, "Description", "WMS 裝置代理：掃碼槍／電子秤 → 本機 WebSocket/HTTP；異常自動重啟。"]);
+  await nssm(["set", SERVICE_NAME, "Start", "SERVICE_AUTO_START"]);
+  // 服務模式：單行程、無視窗（見 runMode.ts）。NSSM 以多個 KEY=VALUE 設定 AppEnvironmentExtra。
+  await nssm(["set", SERVICE_NAME, "AppEnvironmentExtra", "WMS_RUN_MODE=service", "WMS_NO_DETACH=1"]);
+  // 子行程異常結束 → NSSM 自動重啟（節流 5s，避免狂重啟洗資源）。
+  await nssm(["set", SERVICE_NAME, "AppExit", "Default", "Restart"]);
+  await nssm(["set", SERVICE_NAME, "AppRestartDelay", "5000"]);
+  await nssm(["set", SERVICE_NAME, "AppThrottle", "5000"]);
   await hardenService(log);
+  await nssm(["start", SERVICE_NAME]);
   log.notice("服務註冊完成（開機自動啟動、異常自動重啟）。");
 }
 
-/** 解除 Windows 服務（會先停止）。 */
+/** 用 NSSM 解除 Windows 服務（會先停止；不存在也視為成功）。 */
 export async function uninstallService(log: Logger): Promise<void> {
   assertSea();
   log.notice(`解除 Windows 服務 ${SERVICE_NAME}…`);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("服務解除逾時")), INSTALL_TIMEOUT_MS);
-    const svc = makeService();
-    const done = (): void => {
-      clearTimeout(timer);
-      resolve();
-    };
-    svc.on("uninstall", done);
-    svc.on("alreadyuninstalled", done);
-    svc.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err instanceof Error ? err : new Error(String(err)));
-    });
-    svc.uninstall();
-  });
+  await nssm(["stop", SERVICE_NAME], true);
+  await nssm(["remove", SERVICE_NAME, "confirm"], true);
   log.notice("服務已解除。");
 }
 
@@ -144,7 +107,7 @@ export async function restartServiceFromTray(log: Logger): Promise<void> {
     } catch {
       /* 服務本來就停著（1062）等：續走 start */
     }
-    // 等服務真的停下（winsw 收攤子行程需要一點時間），最多 10s。
+    // 等服務真的停下（NSSM 收攤子行程需要一點時間），最多 10s。
     for (let i = 0; i < 20; i++) {
       if ((await queryServiceState()).includes("STOPPED")) break;
       await delay(500);
