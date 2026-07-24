@@ -16,6 +16,8 @@ export interface DeviceDriver {
 export class DeviceManager {
   private readonly drivers: DeviceDriver[] = [];
   private readonly snapshots = new Map<string, DeviceSnapshot>();
+  // 已對此裝置發過使用者面錯誤訊息（連上或移除才清除），避免每次重試輪詢重複洗版。
+  private readonly errorNotified = new Set<string>();
   private started = false;
   private readonly statusListener: (e: DeviceStatusEvent) => void;
 
@@ -34,6 +36,7 @@ export class DeviceManager {
   private onStatus(e: DeviceStatusEvent): void {
     if (e.status === "removed") {
       this.snapshots.delete(e.deviceId);
+      this.errorNotified.delete(e.deviceId);
     } else {
       this.snapshots.set(e.deviceId, {
         deviceId: e.deviceId,
@@ -43,6 +46,17 @@ export class DeviceManager {
         detail: e.detail,
         since: e.ts,
       });
+      if (e.status === "error") {
+        // 使用者面：只指出是「電子秤」還是「掃碼槍」出問題，不含錯誤碼／型號／技術細節；
+        // 每個失敗週期只提示一次（連上後才會再次提示），完整細節仍記在技術檔（見 debug 那行）。
+        if (!this.errorNotified.has(e.deviceId)) {
+          this.errorNotified.add(e.deviceId);
+          const label = e.label ?? (e.kind === "scale" ? "電子秤" : "掃碼槍");
+          this.log.user(`${label}發生錯誤`);
+        }
+      } else if (e.status === "connected") {
+        this.errorNotified.delete(e.deviceId); // 恢復連線 → 下次再出錯可再提示（「已連線」由驅動印出）
+      }
     }
     this.log.debug(`狀態更新 ${e.deviceId} → ${e.status}（${e.deviceName}）${e.detail ? ` | ${e.detail}` : ""}`);
   }

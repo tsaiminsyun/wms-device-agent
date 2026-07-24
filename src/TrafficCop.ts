@@ -33,7 +33,7 @@ export class TrafficCop {
     if (this.hasActiveClaim()) {
       const sent = this.routeScanToWs(e);
       if (sent > 0) {
-        this.log.notice(`掃碼：${e.barcode}`);
+        this.log.user(`掃碼：${e.barcode}`);
         return;
       }
       // 認領剛失效（競態）→ 鍵盤退路。
@@ -44,7 +44,7 @@ export class TrafficCop {
       return;
     }
     // 鍵盤模擬：只印此 log，不另印「掃碼」以免重複。
-    this.log.notice(`掃碼槍改用鍵盤模擬輸入：${e.barcode}`);
+    this.log.user(`掃碼槍改用鍵盤模擬輸入：${e.barcode}`);
     this.keyboard.typeBarcode(e.barcode);
   }
 

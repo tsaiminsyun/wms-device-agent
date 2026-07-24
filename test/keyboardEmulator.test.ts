@@ -35,11 +35,20 @@ vi.mock("../src/runtime/nativeRequire", () => ({
 const execFileMock = vi.hoisted(() =>
   vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (e: unknown, o?: unknown) => void) => cb(null, { stdout: "", stderr: "" })),
 );
-const clipState = vi.hoisted(() => ({ writes: [] as string[], failClose: false }));
+const clipState = vi.hoisted(() => ({ writes: [] as string[], raw: [] as Buffer[], failClose: false }));
 const spawnMock = vi.hoisted(() =>
   vi.fn(() => {
     const child = {
-      stdin: { once: vi.fn(), end: vi.fn((data: string) => clipState.writes.push(String(data))) },
+      stdin: {
+        once: vi.fn(),
+        end: vi.fn((data: string | Buffer) => {
+          const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
+          clipState.raw.push(buf);
+          // clip.exe 收到 UTF-16LE BOM + 內容；照此解碼還原「邏輯字串」供既有斷言使用。
+          const s = buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe ? buf.subarray(2).toString("utf16le") : buf.toString("utf8");
+          clipState.writes.push(s);
+        }),
+      },
       once(ev: string, cb: (arg?: unknown) => void) {
         if (ev === "close") setTimeout(() => cb(clipState.failClose ? 1 : 0), 0);
         return child;
@@ -54,13 +63,14 @@ vi.mock("node:fs", () => ({ writeFileSync: writeFileSyncMock }));
 
 import { KeyboardEmulator } from "../src/keyboard/KeyboardEmulator";
 
-const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), child: () => log } as never;
+const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn(), notice: vi.fn(), user: vi.fn(), child: () => log } as never;
 const flush = () => new Promise((r) => setTimeout(r, 250)); // 等佇列與剪貼簿還原完成
 
 beforeEach(() => {
   nutMock.calls.length = 0;
   nutMock.clipboardStore.content = "USER-CLIP";
   clipState.writes.length = 0;
+  clipState.raw.length = 0;
   clipState.failClose = false;
   vi.clearAllMocks();
 });
@@ -141,6 +151,18 @@ describe("KeyboardEmulator Windows 貼上模式", () => {
     expect(writeFileSyncMock).toHaveBeenCalledTimes(1);
     expect(nutMock.clipboard.setContent).not.toHaveBeenCalled();
     expect(nutMock.keyboard.type).not.toHaveBeenCalled();
+  });
+
+  it("剪貼簿寫入為 UTF-16LE + BOM（避免 clip.exe 誤判編碼把純 ASCII 條碼變 CJK 亂碼）", async () => {
+    const kb = new KeyboardEmulator(log, { enabled: true, pressEnter: false, paste: true });
+    kb.typeBarcode("z20221012002");
+    await flush();
+    const buf = clipState.raw.at(-1) as Buffer;
+    // 前兩位元組是 UTF-16LE BOM
+    expect([buf[0], buf[1]]).toEqual([0xff, 0xfe]);
+    // 內容為 UTF-16LE（每字元 2 位元組），解碼後與原條碼一致——不會發生 "z2"→"㉺" 的併字
+    expect(buf.subarray(2).toString("utf16le")).toBe("z20221012002");
+    expect(buf.length).toBe(2 + "z20221012002".length * 2);
   });
 
   it("pressEnter=true → 傳給 VBS 的旗標為 \"1\"（貼上後補 Enter）", async () => {

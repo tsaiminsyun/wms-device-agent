@@ -27,7 +27,8 @@ const UsagePageSchema = z.union([z.number().int().nonnegative(), z.string()]).tr
 });
 
 // 掃碼去重窗（毫秒）：窗內同一條碼只送第一筆；0=關閉。
-const DedupWindowMsSchema = z.number().int().min(0).default(1500);
+// 預設 150ms＝ 板機模式：每扣一次板機都要算一筆。
+const DedupWindowMsSchema = z.number().int().min(0).default(150);
 
 // 每個子物件加 .default({})：整段缺席時仍套用各欄位預設，而非報 Required。
 export const ConfigSchema = z.object({
@@ -86,6 +87,8 @@ export const ConfigSchema = z.object({
     })
     .default({}),
   logLevel: LogLevelSchema.default("info"),
+  // 指定 log 檔目錄（每日日期檔寫在此）；空＝打包版用「文件\wms-device-agent\logs」、開發環境不寫檔。
+  logDir: z.string().default(""),
 });
 
 export type AppConfig = z.infer<typeof ConfigSchema>;
@@ -130,6 +133,7 @@ function envOverrides(): Record<string, unknown> {
   if (process.env.KEYBOARD_ENABLED) out.keyboard = { enabled: parseBool(process.env.KEYBOARD_ENABLED) };
 
   if (process.env.LOG_LEVEL) out.logLevel = process.env.LOG_LEVEL;
+  if (process.env.WMS_LOG_DIR) out.logDir = process.env.WMS_LOG_DIR;
 
   return out;
 }

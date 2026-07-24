@@ -152,8 +152,8 @@ export class HidScannerDriver implements DeviceDriver {
     const up = typeof info.usagePage === "number" ? `0x${info.usagePage.toString(16)}` : "?";
     this.pushStatus(uid, "connected", `${productName} (${idText}) usagePage=${up}`);
     this.log.info(`[${uid}] 已連線 HID 掃碼槍｜${productName}｜${idText}｜usagePage=${up}`);
-    // 精選事件②：裝置初始化（掃碼槍 HID）。
-    this.log.notice(`掃碼槍（HID）已初始化：${productName}（${idText}）`);
+    // 使用者面：掃碼槍已連線（型號／ID 等技術細節只進完整技術檔，見上一行 info）。
+    this.log.user("掃碼槍已連線");
 
     device.on("data", (data: Buffer) => this.onReport(entry, data));
     device.on("error", (err: Error) => {
@@ -165,13 +165,18 @@ export class HidScannerDriver implements DeviceDriver {
   }
 
   private onReport(entry: OpenEntry, data: Buffer): void {
-    // 原始 report 印在 debug log，供校準 reportHeaderBytes。
-    const hex = [...data].map((b) => b.toString(16).padStart(2, "0")).join(" ");
-    const ascii = [...data].map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : ".")).join("");
-    this.log.debug(`[${entry.uid}] report len=${data.length} hex=[${hex}] ascii="${ascii}"`);
+    // data 事件由 node-hid 原生層觸發；此處若拋錯會變未捕捉例外，故整段包起來、單筆失敗不影響裝置續讀。
+    try {
+      // 原始 report 印在 debug log，供校準 reportHeaderBytes。
+      const hex = [...data].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+      const ascii = [...data].map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : ".")).join("");
+      this.log.debug(`[${entry.uid}] report len=${data.length} hex=[${hex}] ascii="${ascii}"`);
 
-    for (const barcode of parseHidPosReport(data, this.opts.reportHeaderBytes)) {
-      this.scan.emit(entry.uid, barcode);
+      for (const barcode of parseHidPosReport(data, this.opts.reportHeaderBytes)) {
+        this.scan.emit(entry.uid, barcode);
+      }
+    } catch (err) {
+      this.log.warn(`[${entry.uid}] 解析 report 失敗（略過本筆）：`, err);
     }
   }
 
@@ -180,6 +185,9 @@ export class HidScannerDriver implements DeviceDriver {
     this.open.delete(path);
     this.scan.forget(entry.uid);
     this.closeEntry(entry, reason);
+    // 使用者面：裝置移除／連線中斷 → 報「已斷線」。HID 只在實體拔除（"拔除"）或連線錯誤（"錯誤…"）時
+    // 呼叫 detach，兩者皆為「已連上的裝置離線」（開啟失敗不會進到這裡），故都算斷線。
+    if (reason === "拔除" || reason.startsWith("錯誤")) this.log.user("掃碼槍已斷線");
     this.pushStatus(entry.uid, "removed", "");
   }
 

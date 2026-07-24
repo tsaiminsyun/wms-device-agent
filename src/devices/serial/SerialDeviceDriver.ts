@@ -2,7 +2,7 @@
 // 子類別實作 selectPort()（哪些埠是我的）與 handleLine()（一行怎麼處理）。
 
 import { LineFramer } from "../../parsing/LineFramer.js";
-import { OPEN_RETRY_COOLDOWN_MS, PollLoop, RetryCooldown } from "../hotplug.js";
+import { OPEN_RETRY_COOLDOWN_MS, OPEN_RETRY_FIRST_MS, PollLoop, RetryCooldown } from "../hotplug.js";
 import type { DeviceBus } from "../../core/DeviceBus.js";
 import type { DeviceDriver } from "../../core/DeviceManager.js";
 import type { DeviceKind, DeviceStatus } from "../../core/types.js";
@@ -14,15 +14,16 @@ import {
   type SerialPortInfo,
   type SerialPortInstance,
 } from "./serialLoader.js";
+import { restartUsbDevice } from "./usbRestart.js";
 
 // 斷流自動重連的最小間隔（節流）。
 const REOPEN_MIN_INTERVAL_MS = 60_000;
 
-// 連續開埠失敗達此次數 → 提示重插 USB（埠在清單卻開不起，多為控制代碼未釋放／CH340 卡死，軟體救不回）。
-const WARN_REPLUG_AFTER_FAILURES = 3;
+// 開埠失敗達立即重啟 USB
+const RESTART_USB_AFTER_FAILURES = 1;
 
-// 等待原生 close() 回呼的上限；Windows 上裝置已拔或有未完成 I/O 時回呼可能永不觸發，逾時即放手（OS 於行程結束釋放）。
-const CLOSE_TIMEOUT_MS = 800;
+// 等原生 close() 回呼的上限；逾時即放手（OS 於行程結束釋放）。須給足 flush＋close 跑完，否則 CH340 驅動卡死（下次開埠 error 31）。
+const CLOSE_TIMEOUT_MS = 2_000;
 
 // 跨驅動共享：避免兩個驅動同時搶開同一個實體埠。
 export class PortRegistry {
@@ -74,14 +75,19 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   protected abstract readonly displayName: string;
 
   private readonly open = new Map<string, OpenEntry>(); // path → entry
-  private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS);
+  // 首次失敗快重試（前次實例的殘留多在 1 秒內回收），連續失敗才退回長冷卻；每次重試都重新列舉埠。
+  private readonly retry = new RetryCooldown(OPEN_RETRY_COOLDOWN_MS, OPEN_RETRY_FIRST_MS);
   private readonly reopenThrottle = new RetryCooldown(REOPEN_MIN_INTERVAL_MS); // 斷流自動重連節流
   private loop: PollLoop | null = null;
   private SerialPort: SerialPortCtor | null = null;
   private counter = 0;
-  // 連續開埠失敗計數（path → 次數）與已提示重插的 path（避免洗訊息）。
+  // 連續開埠失敗計數（path → 次數）。
   private readonly openFailures = new Map<string, number>();
-  private readonly replugWarned = new Set<string>();
+  // 本失敗週期已自動重啟過 USB 的 path（每週期只重啟一次，避免無限循環；成功開啟才清除）。
+  // 同時兼作 recoverPort 去重旗標：進過復原流程就不再重入，直到成功開埠才清除。
+  private readonly usbRestarted = new Set<string>();
+  // 啟動後第一次輪詢時列出可用序列埠（診斷用，只記一次）。
+  private portsLogged = false;
 
   protected readonly log: Logger;
 
@@ -115,9 +121,9 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
   // 斷流逾此毫秒則關閉重開埠（軟體重插）救回卡死的控制代碼；null=停用。
   protected readonly livenessRecoveryMs: number | null = null;
 
-  // 子類別可覆寫：斷流時的狀態回報。
+  // 子類別可覆寫：斷流時的狀態回報。offline（非 error）＝裝置無回應（可能已關機）。
   protected onLivenessLost(h: SerialPortHandle): void {
-    h.pushStatus("error", "裝置無回應（可能已關機或線路異常）");
+    h.pushStatus("offline", "裝置無回應（可能已關機或線路異常）");
   }
 
   // 子類別可覆寫：資料恢復時的狀態回報。
@@ -146,21 +152,14 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.retry.reset();
     this.reopenThrottle.reset();
     this.openFailures.clear();
-    this.replugWarned.clear();
+    this.usbRestarted.clear();
   }
 
   /** 關閉單一序列埠並釋放所有相關資源；含逾時保護，避免原生 close() 卡住拖住整個關閉流程。 */
   private closePort(path: string, e: OpenEntry): Promise<void> {
     e.closing = true;
-    // 先移除所有監聽器，避免關閉期間殘留閉包與重入。
-    try {
-      e.port.removeAllListeners("data");
-      e.port.removeAllListeners("open");
-      e.port.removeAllListeners("error");
-      e.port.removeAllListeners("close");
-    } catch {
-      /* ignore */
-    }
+    this.log.info(`[${e.handle.uid}] 正在關閉 ${path}…`);
+    detachListeners(e.port); // 先移除監聽器，避免關閉期間殘留閉包與重入
     e.framer.reset();
     this.registry.release(path);
     return new Promise<void>((resolve) => {
@@ -171,21 +170,31 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         clearTimeout(timer);
         resolve();
       };
-      // 逾時保護：close() 回呼未如期觸發也放手，讓關閉流程繼續。
+      // 逾時保護：flush/close 回呼未如期觸發也放手，讓關閉流程繼續（close 仍已排入，盡力而為）。
       const timer = setTimeout(() => {
         this.log.warn(`[${e.handle.uid}] 關閉 ${path} 逾時，放棄等待（控制代碼將於行程結束時由 OS 釋放）。`);
         finish();
       }, CLOSE_TIMEOUT_MS);
       timer.unref?.();
       // 不分 isOpen 一律 close()：開啟中會擲錯（由 catch 收尾）或排入關閉佇列，都保證原生控制代碼被釋放，無殘留占用。
-      try {
-        e.port.close((err) => {
-          if (err) this.log.debug(`[${e.handle.uid}] 關閉 ${path} 回報：`, err);
+      const doClose = (): void => {
+        try {
+          e.port.close((err) => {
+            if (err) this.log.debug(`[${e.handle.uid}] 關閉 ${path} 回報：`, err);
+            else this.log.info(`[${e.handle.uid}] 已關閉並釋放 ${path}`);
+            finish();
+          });
+        } catch (err) {
+          this.log.debug(`[${e.handle.uid}] 關閉 ${path} 例外：`, err);
           finish();
-        });
-      } catch (err) {
-        this.log.debug(`[${e.handle.uid}] 關閉 ${path} 例外：`, err);
-        finish();
+        }
+      };
+      // 關閉乾淨的關鍵：先 flush 中止未完成 read，close() 才不會卡住；硬關會讓 CH340 驅動卡死（下次開埠 SetCommState error 31，需重插）。
+      try {
+        if (e.port.isOpen && typeof e.port.flush === "function") e.port.flush(() => doClose());
+        else doClose();
+      } catch {
+        doClose();
       }
     });
   }
@@ -217,6 +226,11 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.checkLiveness();
     try {
       const ports = await this.SerialPort.list();
+      if (!this.portsLogged) {
+        this.portsLogged = true;
+        const desc = ports.map((p) => `${p.path}${chipText(p) ? `（${chipText(p)}）` : ""}`).join("、");
+        this.log.info(`偵測到序列埠：${desc || "（無）"}`);
+      }
       const seen = new Set(ports.map((p) => p.path));
 
       // 偵測拔除：已開啟但清單裡不見了。
@@ -225,9 +239,8 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       }
       this.retry.prune(seen);
       this.reopenThrottle.prune(seen);
-      // 拔除後清掉失敗計數與提示狀態，重插後重新計。
+      // 拔除後清掉失敗計數，重插後重新計。usbRestarted 不在此清。
       for (const p of [...this.openFailures.keys()]) if (!seen.has(p)) this.openFailures.delete(p);
-      for (const p of [...this.replugWarned]) if (!seen.has(p)) this.replugWarned.delete(p);
 
       // 偵測新增：符合條件、尚未開啟、未被其他驅動占用、且不在重試冷卻中。
       for (const info of ports) {
@@ -257,20 +270,21 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
         const e = this.open.get(info.path);
         if (e) e.identified = true;
       },
-      pushStatus: (status, detail, nameOverride) => this.pushStatus(uid, status, detail, nameOverride),
+      pushStatus: (status, detail, nameOverride) => this.pushStatus(uid, status, detail, nameOverride, this.userLabel(info.path)),
     };
 
     handle.pushStatus("connecting", `連線中… ${info.path}`);
+    this.log.info(`[${uid}] 發現符合的裝置埠 ${info.path}｜${chipText(info) || "無 VID/PID"}，開啟中…`);
 
     let port: SerialPortInstance;
     try {
       port = new this.SerialPort({ path: info.path, baudRate: this.options.baudRate, autoOpen: true, hupcl: this.hupcl });
     } catch (err) {
-      this.log.error(`開啟 ${info.path} 失敗：`, err);
+      this.log.error(`開啟 ${info.path} 失敗（${openFailureHint((err as Error).message)}）：`, err);
       this.registry.release(info.path);
       this.retry.schedule(info.path);
       handle.pushStatus("error", `開啟失敗：${(err as Error).message}`);
-      this.noteOpenFailure(info.path);
+      this.noteOpenFailure(info);
       return;
     }
 
@@ -279,8 +293,8 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
 
     port.on("open", () => {
       this.retry.clear(info.path);
-      this.openFailures.delete(info.path); // 成功開啟 → 清失敗計數與重插提示
-      this.replugWarned.delete(info.path);
+      this.openFailures.delete(info.path); // 成功開啟 → 清失敗計數與自動重啟標記
+      this.usbRestarted.delete(info.path);
       entry.lastDataAt = Date.now(); // 重置寬限期，避免剛開埠就被 liveness 誤判
       this.onOpen(handle);
     });
@@ -295,13 +309,11 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
       for (const line of framer.push(text)) this.handleLine(line, handle);
     });
     port.on("error", (err: Error) => {
-      // autoOpen 失敗（如 "Cannot lock port"＝被占用）：埠未開 → 釋放並冷卻後重試。
+      // autoOpen 失敗：埠未開 → 釋放並冷卻後重試（每次重試前都會重新列舉埠）。
       if (!entry.port.isOpen) {
-        this.log.warn(
-          `[${uid}] 開啟 ${info.path} 失敗：${err.message}（${this.retry.cooldownMs / 1000}s 後重試；常見原因：埠被其他程序佔用）`,
-        );
-        this.retry.schedule(info.path);
-        this.noteOpenFailure(info.path);
+        const waitMs = this.retry.schedule(info.path);
+        this.log.warn(`[${uid}] 開啟 ${info.path} 失敗：${err.message}（${waitMs / 1000}s 後重試；${openFailureHint(err.message)}）`);
+        this.noteOpenFailure(info);
         this.detach(info.path, entry, "開啟失敗");
         return;
       }
@@ -319,43 +331,92 @@ export abstract class SerialDeviceDriver implements DeviceDriver {
     this.open.delete(path);
     this.registry.release(path);
     entry.framer.reset();
+    // 先移除監聽器再關閉，避免殘留閉包洩漏；flush 先中止未完成 I/O，close 才不會卡住。
+    detachListeners(entry.port);
     try {
-      // 先移除監聽器再關閉，避免殘留閉包洩漏。
-      entry.port.removeAllListeners("data");
-      entry.port.removeAllListeners("open");
-      entry.port.removeAllListeners("error");
-      entry.port.removeAllListeners("close");
-      if (entry.port.isOpen) entry.port.close();
+      if (entry.port.isOpen) {
+        if (typeof entry.port.flush === "function") entry.port.flush(() => {});
+        entry.port.close();
+      }
     } catch {
       /* ignore */
     }
     this.log.info(`[${entry.handle.uid}] 移除（${reason}）：${path}`);
+    // 使用者面：裝置移除／連線中斷 → 報「已斷線」。涵蓋實體拔除（"拔除"）與連線意外中斷（"連線關閉"，
+    // 拔 USB 時常先以埠關閉事件送達）；「開啟失敗」（從未連上）與「斷流自動重連」（我方主動重開）不算。
+    if (reason === "拔除" || reason === "連線關閉") this.log.user(`${this.userLabel(entry.handle.info.path)}已斷線`);
     this.pushStatus(entry.handle.uid, "removed", "");
   }
 
-  // 累計開埠失敗；連續達門檻時提示重插 USB（只提示一次，成功開啟或重插後重置）。用 notice 確保精簡 log 也看得到。
-  private noteOpenFailure(path: string): void {
+  // usbRestarted 去重（每失敗週期只復原一次），故此處直接呼叫即可。
+  private noteOpenFailure(info: SerialPortInfo): void {
+    const path = info.path;
     const count = (this.openFailures.get(path) ?? 0) + 1;
     this.openFailures.set(path, count);
-    if (count >= WARN_REPLUG_AFTER_FAILURES && !this.replugWarned.has(path)) {
-      this.replugWarned.add(path);
-      this.log.notice(
-        `${this.displayName}無法連線（${path}）：連續 ${count} 次連線失敗。` +
-          `請將該 USB 裝置拔除後重新插上，即可自動恢復連線。`,
-      );
-    }
+    if (count < RESTART_USB_AFTER_FAILURES) return;
+    void this.recoverPort(info);
   }
 
-  protected pushStatus(uid: string, status: DeviceStatus, detail: string, nameOverride?: string): void {
+  // 自動復原：重啟 USB 裝置（軟體重插，救 CH340 驅動卡死）。
+  private async recoverPort(info: SerialPortInfo): Promise<void> {
+    const path = info.path;
+    if (this.usbRestarted.has(path)) return; // 本週期已復原過 → 靜默重試，不重啟也不洗訊息
+    this.usbRestarted.add(path);
+    if (process.platform === "win32") {
+      this.log.notice(`${this.displayName}無法開啟 COM 埠（${path}），立即嘗試自動重啟 USB 裝置…`);
+      if (await restartUsbDevice(info, this.log)) {
+        this.log.notice(`已自動重啟 USB 裝置（${path}），等待重新連線…`);
+        this.retry.clear(path); // 重新列舉後下一輪輪詢立即重開
+        return;
+      }
+      this.log.notice(`自動重啟 USB 裝置失敗（需系統管理員權限）。請將該 USB 裝置拔除後重新插上，即可自動恢復連線。`);
+      return;
+    }
+    this.log.notice(
+      `${this.displayName}無法連線（${path}）。請將該 USB 裝置拔除後重新插上，即可自動恢復連線。`,
+    );
+  }
+
+  // 使用者面裝置標籤（可被子類覆寫加編號，如「電子秤1」）。預設依 kind：電子秤／掃碼槍。
+  // 同機可能接兩台電子秤，故需能區分是哪一台。
+  protected userLabel(_path: string): string {
+    return this.kind === "scale" ? "電子秤" : "掃碼槍";
+  }
+
+  protected pushStatus(uid: string, status: DeviceStatus, detail: string, nameOverride?: string, label?: string): void {
     this.bus.emit("device-status", {
       deviceId: uid,
       deviceName: nameOverride ?? this.displayName,
       kind: this.kind,
       status,
       detail,
+      label,
       ts: Date.now(),
     });
   }
+}
+
+// 移除序列埠所有事件監聽器（關閉／detach 前呼叫，避免殘留閉包與重入）。
+function detachListeners(port: SerialPortInstance): void {
+  try {
+    for (const ev of ["data", "open", "error", "close"] as const) port.removeAllListeners(ev);
+  } catch {
+    /* ignore */
+  }
+}
+
+// 依錯誤訊息分類開埠失敗原因，取代一律「被占用」的籠統提示。
+export function openFailureHint(message: string): string {
+  if (/SetCommState|GEN_FAILURE|error code 31/i.test(message)) {
+    return "驅動未回應，多為前次未正常關閉或裝置卡死；連續失敗將自動重啟 USB 裝置";
+  }
+  if (/access denied|cannot lock|ERROR_ACCESS_DENIED/i.test(message)) {
+    return "埠被其他程序佔用（另一實例或序列埠監看工具）";
+  }
+  if (/file not found|FILE_NOT_FOUND|ENOENT|no such file/i.test(message)) {
+    return "裝置不存在（可能剛被拔除，重新列舉後自動重試）";
+  }
+  return "常見原因：埠被占用或裝置異常";
 }
 
 // 常見 USB-serial 晶片 VID → 名稱。

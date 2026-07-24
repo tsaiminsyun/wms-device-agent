@@ -1,6 +1,6 @@
 {
   "name": "wms-device-agent",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "本機裝置代理：以 WebSocket / HTTP 將掃碼槍、電子秤等設備訊號轉給 WMS 網頁端；離線時退回系統鍵盤模擬（交警模式）。",
   "type": "module",
   "private": true,
@@ -9,13 +9,17 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "LOG_LEVEL=debug tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package:win": "bash packaging/windows/build-win.sh"
+    "bump": "npm version patch --no-git-tag-version",
+    "package:win": "bash packaging/windows/build-win.sh && bash packaging/windows/compile-installer.sh",
+    "package:win:kit": "WMS_KIT_ZIP=1 bash packaging/windows/build-win.sh",
+    "release:win": "pnpm bump && pnpm package:win",
+    "release:win:minor": "npm version minor --no-git-tag-version && pnpm package:win"
   },
   "dependencies": {
     "ws": "^8.18.0",

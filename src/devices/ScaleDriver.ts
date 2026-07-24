@@ -31,6 +31,15 @@ export class ScaleDriver extends SerialDeviceDriver {
 
   // 每個 uid 的最後送出值（去重用）。
   private readonly lastEmit = new Map<string, LastEmit>();
+  // 已提示「關機」的實體埠（以 COM 路徑為鍵——uid 每次重連會變，路徑才穩定）：
+  // 關機期間只提示一次，跨自動重連週期也不重複；開機／重新連線時清除並提示「開機」。
+  private readonly offNotified = new Set<string>();
+
+  // 使用者面標籤：以 COM 埠標示（如「電子秤 (COM3)」），與裝置管理員一致，
+  // 同機接兩台電子秤時可對應到哪一條線。
+  protected override userLabel(path: string): string {
+    return `電子秤 (${path})`;
+  }
 
   constructor(
     bus: DeviceBus,
@@ -59,7 +68,18 @@ export class ScaleDriver extends SerialDeviceDriver {
 
   protected override onLivenessLost(h: SerialPortHandle): void {
     this.lastEmit.delete(h.uid); // 清去重快取：恢復後同重量也重新送出
-    h.pushStatus("error", "電子秤無資料（可能已關機或線路異常）");
+    h.pushStatus("offline", "電子秤無資料（可能已關機或線路異常）");
+    // 連上後被關機才提示（首次連線失敗不會走到這）；每個埠關機期間只提示一次。
+    if (!this.offNotified.has(h.info.path)) {
+      this.offNotified.add(h.info.path);
+      this.log.user(`${this.userLabel(h.info.path)}已關機`);
+    }
+  }
+
+  protected override onLivenessRestored(h: SerialPortHandle): void {
+    h.pushStatus("connected", chipText(h.info));
+    // 同一連線內資料恢復（未經重連）：若先前判定關機 → 開機。
+    if (this.offNotified.delete(h.info.path)) this.log.user(`${this.userLabel(h.info.path)}已開機`);
   }
 
   protected handleLine(line: string, h: SerialPortHandle): void {
@@ -68,8 +88,10 @@ export class ScaleDriver extends SerialDeviceDriver {
       h.markIdentified();
       h.pushStatus("connected", chipText(h.info)); // 升級為「電子秤」
       this.log.info(`[${h.uid}] 資料指紋命中 → 辨識為電子秤`);
-      // 精選事件②：裝置初始化（電子秤）。
-      this.log.notice(`電子秤已初始化：${h.info.path}`);
+      // 使用者面：若此埠先前判定關機（含關機後自動重連重新辨識）視為「開機」，否則為首次「已連線」。
+      const label = this.userLabel(h.info.path);
+      if (this.offNotified.delete(h.info.path)) this.log.user(`${label}已開機`);
+      else this.log.user(`${label}已連線`);
     }
     const parsed = parseScaleLine(line);
     if (parsed) this.emitReading(h.uid, parsed.kg, parsed.stable);
