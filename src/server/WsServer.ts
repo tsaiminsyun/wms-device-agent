@@ -34,8 +34,6 @@ interface ClientState {
   focusActive: boolean;
   /** 認領逾時時間（epoch ms）。 */
   focusExpiresAt: number;
-  /** 已註冊為鍵盤輸出端（工作列元件）：服務模式下離線掃碼經 kbd 訊息委派給它代打。 */
-  typist: boolean;
 }
 
 export type WsSecurity = OriginPolicy;
@@ -105,7 +103,6 @@ export class WsServer {
       origin,
       focusActive: false,
       focusExpiresAt: 0,
-      typist: false,
     };
     this.clients.set(ws, state);
     this.log.info(`WS 用戶端 #${state.id} 連線（Origin: ${origin || "(無)"}）；目前連線數 ${this.clients.size}`);
@@ -162,13 +159,6 @@ export class WsServer {
         }
         // 不回 ack：續約頻繁，避免雜訊。
         break;
-      case "typist":
-        if (state) {
-          state.typist = msg.active;
-          this.log.info(`用戶端 #${state.id} ${msg.active ? "註冊" : "取消"}鍵盤輸出端（typist）`);
-        }
-        this.sendTo(ws, build.ack(null));
-        break;
     }
   }
 
@@ -223,17 +213,6 @@ export class WsServer {
       if (this.isValidClaim(ws, s, now)) n++;
     }
     return n;
-  }
-
-  /** 把一筆條碼委派給已註冊 typist 的用戶端（工作列元件代打鍵盤）。回傳實際送達數。 */
-  broadcastKbd(barcode: string): number {
-    const payload = serialize(build.kbd(barcode));
-    let sent = 0;
-    for (const [ws, s] of this.clients) {
-      if (ws.readyState !== WebSocket.OPEN || !s.typist) continue;
-      if (this.rawSend(ws, payload, s.id)) sent++;
-    }
-    return sent;
   }
 
   /** 把一筆掃碼送給「持有有效認領、且訂閱 scan」的用戶端。回傳實際送達數。 */

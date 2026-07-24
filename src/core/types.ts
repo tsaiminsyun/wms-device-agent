@@ -2,7 +2,8 @@
 
 export type DeviceKind = "scanner" | "scale";
 
-export type DeviceStatus = "connecting" | "connected" | "removed" | "error";
+// offline＝已開啟但裝置無回應（如電子秤關機），有別於 error（開埠/連線失敗）與 removed（實體拔除）。
+export type DeviceStatus = "connecting" | "connected" | "removed" | "error" | "offline";
 
 // 一次掃碼結果。
 export interface ScanEvent {
@@ -37,6 +38,8 @@ export interface DeviceStatusEvent {
   status: DeviceStatus;
   /** 補充說明（晶片型號、錯誤訊息、productName 等）。 */
   detail: string;
+  /** 使用者面標籤（含裝置編號，如「電子秤1」）；用於 log。省略時依 kind 取預設（電子秤／掃碼槍）。 */
+  label?: string;
   ts: number;
 }
 

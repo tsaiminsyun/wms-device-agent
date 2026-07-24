@@ -19,6 +19,7 @@ const log = {
   warn: vi.fn(),
   error: vi.fn(),
   notice: vi.fn(),
+  user: vi.fn(),
   child: vi.fn(),
 } as unknown as Logger;
 

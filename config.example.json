@@ -27,15 +27,15 @@
     "baudRate": 9600,
     "path": null,
     "keyboardFallback": true,
-    "dedupWindowMs": 1500
+    "dedupWindowMs": 150
   },
   "hidScanner": {
-    "$comment": "HID-POS/IBM 掃碼槍（node-hid）。usagePages 空=不過濾；reportHeaderBytes 依機型校準；dedupWindowMs=連續重讀抑制窗（0=關閉）。",
+    "$comment": "HID-POS/IBM 掃碼槍（node-hid）。usagePages 空=不過濾；reportHeaderBytes 依機型校準；dedupWindowMs=同條碼去重窗毫秒（0=關閉；預設 150＝只吃掉單次掃描硬體重送的重複報文，同碼刻意重掃照樣放行；連續/presentation 模式想抑制擺放狂洗才調大）。",
     "enabled": true,
     "vendorIds": ["05e0"],
     "usagePages": [],
     "reportHeaderBytes": 4,
-    "dedupWindowMs": 1500
+    "dedupWindowMs": 150
   },
   "scale": {
     "enabled": true,
@@ -52,5 +52,7 @@
     "pressEnter": true,
     "paste": true
   },
-  "logLevel": "info"
+  "logLevel": "info",
+  "$comment_logDir": "log 檔目錄（每日日期檔 wms-agent-YYYY-MM-DD.log）。留空＝打包版寫在使用者「文件\\\\wms-device-agent\\\\logs」。可指定絕對路徑，如 C:\\\\wms-logs。",
+  "logDir": ""
 }

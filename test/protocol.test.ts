@@ -32,13 +32,6 @@ describe("server message builders", () => {
     const m = build.error("not-implemented", "x", "job-1");
     expect(m.ref).toBe("job-1");
   });
-
-  it("kbd 訊息（委派工作列元件代打）帶 barcode", () => {
-    const m = build.kbd("4710");
-    expect(m.type).toBe("kbd");
-    expect(m.barcode).toBe("4710");
-    expect(m.v).toBe(PROTOCOL_VERSION);
-  });
 });
 
 describe("parseClientMessage", () => {
@@ -79,15 +72,5 @@ describe("parseClientMessage", () => {
 
   it("focus 缺 active 回 ok=false", () => {
     expect(parseClientMessage(JSON.stringify({ type: "focus" })).ok).toBe(false);
-  });
-
-  it("typist 註冊訊息；active 預設 true", () => {
-    const r = parseClientMessage(JSON.stringify({ type: "typist" }));
-    expect(r.ok).toBe(true);
-    if (r.ok && r.message.type === "typist") expect(r.message.active).toBe(true);
-    else throw new Error("應為 typist");
-    const r2 = parseClientMessage(JSON.stringify({ type: "typist", active: false }));
-    expect(r2.ok).toBe(true);
-    if (r2.ok && r2.message.type === "typist") expect(r2.message.active).toBe(false);
   });
 });

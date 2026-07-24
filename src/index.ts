@@ -1,20 +1,21 @@
 // 進入點：設定 → 組裝裝置驅動/WS/HTTP/交警模式 → 啟動 → 優雅關閉。
-// 執行角色見 runtime/runMode.ts：default（靜默啟動器＋背景實例）/ service（Windows 服務）/ tray（工作列元件）。
 
-import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Server as HttpServer } from "node:http";
 import { loadConfig } from "./config.js";
-import { createLogger, enableFileLog, logFileDir, setLogLevel, type Logger } from "./logger.js";
+import { createLogger, defaultLogDir, initFileLogging, setLogLevel, type Logger } from "./logger.js";
 import { freePortIfOwnedByUs } from "./runtime/freePort.js";
-import { runWindowsLauncherIfNeeded, killRelatedProcesses, cleanupLogFiles, openWithShell } from "./runtime/detach.js";
-import { getRunMode, hasCliFlag } from "./runtime/runMode.js";
-import { runServiceCli } from "./runtime/serviceControl.js";
+import { installCrashGuards } from "./runtime/proc.js";
+import { ensureAdminOrRelaunch } from "./runtime/elevate.js";
 import { isSeaBuild } from "./runtime/nativeRequire.js";
-import { runTrayCompanion } from "./tray/trayCompanion.js";
+import {
+  runWindowsLauncherIfNeeded,
+  killRelatedProcesses,
+  restartWorker,
+  showStatusWindow,
+} from "./runtime/detach.js";
 import { DeviceBus } from "./core/DeviceBus.js";
 import { DeviceManager } from "./core/DeviceManager.js";
 import { PortRegistry } from "./devices/serial/SerialDeviceDriver.js";
@@ -80,41 +81,29 @@ async function listenWithRetry(server: HttpServer, port: number, host: string, l
 }
 
 async function main(): Promise<void> {
-  // 服務註冊 CLI（安裝程式以系統管理員呼叫）：處理完直接結束。
-  if (hasCliFlag("--install-service") || hasCliFlag("--uninstall-service")) {
-    await runServiceCli(hasCliFlag("--install-service"), createLogger("service-setup"));
-    return;
-  }
+  // Windows 打包版：強制以系統管理員身分執行（未提權則 UAC 重啟後結束本行程）。
+  ensureAdminOrRelaunch();
 
   const config = loadConfig();
-  const mode = getRunMode();
-  const meta = readPackageMeta();
 
-  // 工作列元件（--tray）：系統匣選單＋替服務在使用者桌面代打鍵盤；不啟動代理本體。
-  if (mode === "tray") {
-    setLogLevel(config.logLevel);
-    await runTrayCompanion(config, meta.version);
-    return;
-  }
-
-  // Windows 打包版分流：本行程可能只是靜默啟動器（不開視窗），代理本體在脫離主控台的背景實例執行（見 detach.ts）。
-  // 服務模式不分流：SCM/NSSM 直接管本行程，單行程直跑。
-  if (mode !== "service" && (await runWindowsLauncherIfNeeded(`http://${config.server.host}:${config.server.port}/health`))) {
+  // Windows 打包版分流：本行程可能只是前台狀態視窗，代理本體在脫離主控台的背景實例執行（見 detach.ts）。
+  if (await runWindowsLauncherIfNeeded(`http://${config.server.host}:${config.server.port}/health`)) {
     return; // tail interval 會讓事件迴圈存活；視窗被關掉時本行程自然結束
   }
 
   setLogLevel(config.logLevel);
-  // 每日輪替 log 檔：服務/打包版寫 <exe 同層>/logs/wms-agent-YYYY-MM-DD.log；開發環境可用 WMS_LOG_DIR 啟用。
-  if (process.env.WMS_LOG_DIR) {
-    enableFileLog(process.env.WMS_LOG_DIR);
-  } else if (mode === "service" || (process.platform === "win32" && isSeaBuild())) {
-    enableFileLog(join(dirname(process.execPath), "logs"));
-  }
   const log = createLogger("agent");
-
-  // 全域防護：原生層（serialport/node-hid）拔插瞬間可能丟出未捕捉錯誤——記 log 續跑，不讓服務崩潰。
-  process.on("uncaughtException", (err) => log.error("未捕捉例外（服務續行）：", err));
-  process.on("unhandledRejection", (err) => log.error("未處理的 Promise 拒絕（服務續行）：", err));
+  // 檔案 log：所有執行狀態與錯誤即時寫入日期檔。目錄取自 config.logDir（指定路徑）；
+  // 未指定則打包版用 exe 同層的 logs 子資料夾（集中存放），開發環境不寫檔。
+  // log 檔永久保留（不自動清除舊檔），便於事後回溯任何時間點的紀錄。
+  const logDir = config.logDir || (isSeaBuild() ? defaultLogDir() : "");
+  if (logDir) initFileLogging(logDir);
+  const meta = readPackageMeta();
+  // 程式啟動——狀態視窗第一條，讓使用者一眼看到服務「正在開啟」，並帶版本號便於辨識／回報。
+  log.user(`${meta.name} v${meta.version} 啟動中`);
+  // 全域防護：原生層（serialport/node-hid）在掃碼槍/電子秤拔插瞬間可能拋出未捕捉例外，
+  // 記 log 後續跑、不讓行程崩潰（裝置重連交由各驅動的輪詢重試機制處理）。
+  installCrashGuards(log);
 
   const agentInfo: AgentInfo = {
     name: meta.name,
@@ -165,9 +154,8 @@ async function main(): Promise<void> {
   }
 
   // ---- 伺服器 + 交警模式 ----
-  // 服務模式跑在 session 0，鍵盤模擬打不到使用者桌面 → 本機停用，離線掃碼經 WS 委派工作列元件（typist）代打。
   const keyboard = new KeyboardEmulator(log, {
-    enabled: config.keyboard.enabled && mode !== "service",
+    enabled: config.keyboard.enabled,
     pressEnter: config.keyboard.pressEnter,
     paste: config.keyboard.paste,
   });
@@ -181,7 +169,7 @@ async function main(): Promise<void> {
     keyboard,
     () => wsServer.hasActiveClaim(),
     (e) => wsServer.broadcastScan(e),
-    { keyboardFallback: config.scanner.keyboardFallback, routeToTypist: (barcode) => wsServer.broadcastKbd(barcode) },
+    { keyboardFallback: config.scanner.keyboardFallback },
   );
 
   // /shutdown 的回呼在 shutdown 定義後才接上（見下）。
@@ -212,8 +200,8 @@ async function main(): Promise<void> {
   await listenWithRetry(httpServer, config.server.port, config.server.host, log);
 
   const base = `${config.server.host}:${config.server.port}`;
-  // 精選事件：啟動。其餘細節僅 debug 模式顯示。
-  log.notice(`${agentInfo.name} v${agentInfo.version} 已啟動`);
+  // 使用者面：啟動完成。重啟接手（工作列「重啟服務」）時顯示「已重啟」，否則「已啟動」；兩者都帶名稱與版本號。
+  log.user(`${agentInfo.name} v${agentInfo.version} ${process.env.WMS_FORCE_RESTART === "1" ? "已重啟" : "已啟動"}`);
   log.debug(`平台 ${agentInfo.platform}`);
   log.debug(`HTTP 健康檢查：http://${base}/health`);
   log.debug(`HTTP 設備狀態：http://${base}/devices`);
@@ -223,12 +211,14 @@ async function main(): Promise<void> {
   // ---- 優雅關閉（務必釋放埠）----
   let tray: Tray | null = null;
   let shuttingDown = false;
-  // killRelated：完全結束（工作列 Exit）時連同相關程序一起關掉。
-  // relaunch：工作列「重啟服務」——資源全部釋放後另起新實例再退出（走啟動器分流）。
-  const shutdown = async (sig: string, killRelated = false, relaunch = false): Promise<void> => {
+  // killRelated：完全結束時連同相關程序（其他狀態視窗、殘留 helper）一起關掉。
+  const shutdown = async (sig: string, killRelated = false): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    log.info(`收到 ${sig}，開始關閉…`);
+    // 使用者面：應用程式關閉（含重啟接手時舊實例的收攤）。
+    log.user("應用程式已關閉");
+    // notice 僅進主控台（技術細節），讓精簡 log 保持乾淨。
+    log.notice(`收到 ${sig}，開始關閉…`);
     // 看門狗：清理卡住也要在時限內強制退出以釋放埠。
     const watchdog = setTimeout(() => {
       log.warn("關閉逾時，強制結束以釋放埠。");
@@ -239,9 +229,7 @@ async function main(): Promise<void> {
       // 【順序關鍵】先釋放序列埠（電子秤 COM）——即使後續步驟卡住或看門狗逾時，埠也已乾淨關閉，
       // 確保下次啟動能立即重連。再收網路，最後才收較慢且與埠無關的工作列 helper。
       trafficCop.stop();
-      log.info("正在關閉序列埠與裝置驅動…");
       await deviceManager.stopAll();
-      log.info("裝置驅動已停止，序列埠已全數釋放。");
       await wsServer.stop();
       wsServer.detach(httpServer);
       // 強制斷開殘留連線，否則 close() 會等所有連線結束、程序無法退出。
@@ -251,37 +239,14 @@ async function main(): Promise<void> {
     } catch (err) {
       log.error("關閉時發生錯誤：", err);
     } finally {
-      // 完全結束：本身資源已釋放，再關掉相關程序（殘留實例、tray helper），最後退出自己。
-      if (killRelated) {
-        await killRelatedProcesses(log);
-        // 清掉本次的 log 檔；仍被 stdout 占用而刪不掉的，下次啟動前會再清一次（見 detach.ts）。
-        const { removed } = cleanupLogFiles();
-        if (removed.length) log.info(`結束：已清除 log 檔（${removed.join("、")}）。`);
-      }
-      // 重啟：埠與 COM 都已釋放，另起新實例（啟動器分流：health 已死 → 起新背景實例）後才退出。
-      if (relaunch) {
-        try {
-          const env = { ...process.env };
-          delete env.WMS_AGENT_WORKER;
-          delete env.WMS_LAUNCHER_QUIET;
-          spawn(process.execPath, [], {
-            cwd: dirname(process.execPath),
-            detached: true,
-            windowsHide: true,
-            stdio: "ignore",
-            env,
-          }).unref();
-          log.info("重啟：已啟動新實例。");
-        } catch (err) {
-          log.warn("重啟失敗（請手動重新啟動）：", err);
-        }
-      }
+      // 完全結束：本身資源已釋放，再關掉相關程序（狀態視窗、殘留 helper），最後退出自己。
+      if (killRelated) await killRelatedProcesses(log);
       clearTimeout(watchdog);
-      log.info("已關閉。");
+      log.notice("已關閉。");
       process.exit(0);
     }
   };
-  // 新實例接手（POST /shutdown）：與「重啟服務」相同的優雅關閉，乾淨釋放 COM 後退出。
+  // 新實例接手（POST /shutdown）：優雅關閉並乾淨釋放 COM 後退出，保證下次啟動能重連電子秤。
   requestShutdown = () => void shutdown("HTTP 關閉請求（新實例接手）");
   // 關閉訊號（SIGBREAK 僅 Windows）。
   process.on("SIGINT", () => void shutdown("SIGINT"));
@@ -291,24 +256,23 @@ async function main(): Promise<void> {
     process.on("SIGBREAK", () => void shutdown("SIGBREAK"));
   }
 
-  // 工作列常駐圖示（Windows，非服務模式）：背景執行的唯一可見入口（啟動不開任何視窗）。
-  // 服務模式在 session 0 畫不出系統匣，圖示由工作列元件（--tray，使用者 session）提供（選單相同）。
-  if (mode !== "service") {
-    const logsDir = logFileDir() ?? join(dirname(process.execPath), "logs");
-    tray = new Tray(log, {
-      version: agentInfo.version,
-      items: [
-        { title: "開啟 Log", tooltip: "開啟 log 資料夾（每日輪替 .log 檔）", onClick: () => openWithShell(logsDir, log) },
-        { title: "連線狀態", tooltip: "以瀏覽器開啟裝置連線狀態（/devices）", onClick: () => openWithShell(`http://${base}/devices`, log) },
-        { title: "重啟服務", tooltip: "重新啟動背景代理（釋放並重連所有裝置）", onClick: () => void shutdown("工作列 重啟", false, true) },
-        { title: "結束", tooltip: "完全結束程式（含背景程序）", onClick: () => void shutdown("工作列 Exit", true) },
-      ],
-    });
-    tray.start();
-  }
+  // 工作列常駐圖示（Windows）：背景執行的可見入口。右鍵選單：開啟 Log／重啟服務／結束。
+  tray = new Tray(log, {
+    version: agentInfo.version,
+    onOpenLog: () => void showStatusWindow(log),
+    onRestart: () => restartWorker(log),
+    onExit: () => void shutdown("工作列 Exit", true),
+  });
+  tray.start();
 }
 
 main().catch((err) => {
   console.error("啟動失敗：", err);
+  // 使用者面：啟動失敗也算應用程式錯誤（若檔案 log 已啟用即寫入精選檔；技術細節見主控台／技術檔）。
+  try {
+    createLogger("startup").user("應用程式發生錯誤");
+  } catch {
+    /* logger 尚未就緒：忽略 */
+  }
   process.exit(1);
 });

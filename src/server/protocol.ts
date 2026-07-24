@@ -46,10 +46,6 @@ export interface DeviceStatusMessage extends Envelope<"device-status"> {
   status: DeviceStatus;
   detail: string;
 }
-/** 委派鍵盤輸出：送給已註冊 typist 的用戶端（工作列元件），由它在使用者桌面打出條碼。 */
-export interface KbdMessage extends Envelope<"kbd"> {
-  barcode: string;
-}
 export interface PongMessage extends Envelope<"pong"> {
   echo: number | null;
 }
@@ -68,7 +64,6 @@ export type ServerMessage =
   | ScanMessage
   | WeightMessage
   | DeviceStatusMessage
-  | KbdMessage
   | PongMessage
   | AckMessage
   | ErrorMessage;
@@ -114,9 +109,6 @@ export const build = {
       detail: p.detail,
     };
   },
-  kbd(barcode: string): KbdMessage {
-    return { v: PROTOCOL_VERSION, type: "kbd", ts: now(), barcode };
-  },
   pong(echo: number | null): PongMessage {
     return { v: PROTOCOL_VERSION, type: "pong", ts: now(), echo };
   },
@@ -147,13 +139,8 @@ const FocusSchema = z.object({
   type: z.literal("focus"),
   active: z.boolean(),
 });
-// 鍵盤輸出端註冊：工作列元件（使用者 session）宣告可代打鍵盤；服務把離線掃碼經 kbd 訊息委派給它。
-const TypistSchema = z.object({
-  type: z.literal("typist"),
-  active: z.boolean().default(true),
-});
 
-export const ClientMessageSchema = z.discriminatedUnion("type", [PingSchema, SubscribeSchema, FocusSchema, TypistSchema]);
+export const ClientMessageSchema = z.discriminatedUnion("type", [PingSchema, SubscribeSchema, FocusSchema]);
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
 export type ParseResult = { ok: true; message: ClientMessage } | { ok: false; error: string };

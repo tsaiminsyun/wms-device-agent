@@ -13,4 +13,12 @@ dist-win/
 packaging/.cache/
 packaging/windows/native-deps/node_modules/
 packaging/windows/native-deps/package-lock.json
-wms-device-agent.zip
+packaging/windows/Output/
+# 根目錄成品：安裝程式（setup exe/zip）與建置來源 kit zip
+wms-device-agent-setup-*.exe
+wms-device-agent-setup-*.zip
+wms-device-agent-installer-*.zip
+
+# Claude Code 本機設定（個人權限允許清單、絕對路徑等，屬於個人環境，不進版控）
+.claude/settings.json
+.claude/settings.local.json

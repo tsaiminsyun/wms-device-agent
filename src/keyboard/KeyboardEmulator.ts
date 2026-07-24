@@ -184,7 +184,10 @@ export class KeyboardEmulator {
       child.once("error", reject);
       child.once("close", (code) => (code === 0 ? resolve() : reject(new Error(`clip.exe 結束碼 ${code}`))));
       child.stdin.once("error", reject);
-      child.stdin.end(text, "utf8");
+      // clip.exe 依 BOM 判斷編碼；沒有 BOM 時某些 Windows 版本會把輸入位元組當成 UTF-16LE，
+      // 使純 ASCII 條碼每兩碼被併成一個 CJK 字（如 "z2" → "㉺"）。故明確送 UTF-16LE BOM + 內容，杜絕誤判。
+      const payload = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+      child.stdin.end(payload);
     });
   }
 

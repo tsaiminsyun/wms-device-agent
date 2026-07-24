@@ -1,12 +1,10 @@
 // Windows：以 pnputil 重啟 COM 埠對應的 USB 裝置（等同裝置管理員「停用→啟用」＝軟體重插）。
 // 用途：救回 CH340 等驅動卡死（開埠時 SetCommState error 31）。需系統管理員權限（服務模式為 SYSTEM，可用）。
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { pexec } from "../../runtime/proc.js";
 import type { Logger } from "../../logger.js";
 import type { SerialPortInfo } from "./serialLoader.js";
 
-const pexec = promisify(execFile);
 const RESTART_TIMEOUT_MS = 15_000;
 
 /** 重啟埠背後的 USB 裝置；成功回 true（裝置會短暫消失後重新列舉）。失敗（無權限／無實例 ID）回 false。 */

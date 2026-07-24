@@ -41,8 +41,7 @@ export class PollLoop {
   }
 }
 
-/** 開啟失敗裝置的重試冷卻表（key 為裝置路徑）；冷卻期間輪詢略過該裝置。
- *  可設較短的首次冷卻（firstCooldownMs）：第一次失敗快重試，連續失敗才退回長冷卻。 */
+/** 開啟失敗裝置的重試冷卻表（key=裝置路徑）；冷卻期間輪詢略過。firstCooldownMs 可設較短的首次冷卻，連續失敗才退長冷卻。 */
 export class RetryCooldown {
   private readonly until = new Map<string, number>();
   private readonly failures = new Map<string, number>();

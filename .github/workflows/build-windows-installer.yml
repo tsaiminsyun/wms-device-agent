@@ -1,0 +1,41 @@
+name: Build Windows Installer
+
+# Everything runs on Linux: the Windows payload is cross-built (prebuilt native
+# modules + downloaded node.exe), and setup.exe is compiled via the amake/innosetup
+# Docker image (Wine + Inno Setup). No Windows runner needed.
+# Trigger on a version tag (v*) or manually.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build installer (Linux + Docker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Builds the kit (payload + .iss) then compiles setup.exe via Docker.
+      - name: Build installer (setup.exe)
+        run: pnpm package:win
+
+      - name: Upload installer (setup.exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: wms-device-agent-setup
+          path: wms-device-agent-setup-*.exe
+          if-no-files-found: error

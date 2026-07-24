@@ -1,5 +1,5 @@
-// 掃碼去重：抑制 presentation/連續模式下同一條碼的連續重讀（延長式抑制，只放行第一筆，
-// 出現空檔後同碼再讀視為刻意重掃）。windowMs=0 關閉。
+// 掃碼去重：延長式抑制，只放行第一筆，出現空檔後同碼再讀視為刻意重掃）。
+// 想抑制擺放狂洗可把窗調大。windowMs=0 關閉。
 
 import type { DeviceBus } from "../core/DeviceBus.js";
 import type { Logger } from "../logger.js";

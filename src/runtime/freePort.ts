@@ -1,24 +1,20 @@
-// 埠接管（單一實例保障）：占用者確為本程式舊實例時，先請它優雅關閉（POST /shutdown，
-// 會 flush＋close 序列埠再退出——與「重啟服務」相同的乾淨交接），逾時才強制結束。絕不誤殺其他程式。
+// 埠接管（單一實例保障）：占用者確為本程式舊實例才處理，先優雅關閉逾時才強殺；絕不誤殺其他程式。
 
-import { execFile } from "node:child_process";
 import { basename } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { promisify } from "node:util";
+import { pexec } from "./proc.js";
 import type { Logger } from "../logger.js";
 
-const pexec = promisify(execFile);
-
-// 優雅關閉請求逾時／等舊實例退出的上限（其關閉看門狗 4s，取 6s 給足餘裕）。
+// 優雅關閉請求逾時／等舊實例退出上限（對方關閉看門狗 4s，取 6s 留餘裕）。
 const GRACEFUL_REQUEST_TIMEOUT_MS = 1_500;
 const GRACEFUL_EXIT_TIMEOUT_MS = 6_000;
 
-// 我方執行檔名（打包後 wms-device-agent.exe，開發期 node）。
+// 我方執行檔名（打包後 exe，開發期 node）。
 function ownImageName(): string {
   return basename(process.execPath).toLowerCase();
 }
 
-// 找出占用該本地埠的 PID 集合（排除自己）。
+// 找出占用該本地埠的 PID（排除自己）。
 async function findPortPids(port: number): Promise<number[]> {
   const pids = new Set<number>();
   try {
@@ -114,11 +110,11 @@ export async function freePortIfOwnedByUs(port: number, log: Logger): Promise<bo
   }
   if (ours.length === 0) return false;
 
-  // 【重連關鍵】強制結束會讓 COM 控制代碼被硬斷，CH340 驅動因此卡死（下次開埠 SetCommState error 31，
-  // 需重插才能恢復）。所以先請舊實例優雅關閉——它會 flush＋close 序列埠後退出，交接才乾淨。
-  log.info(`埠 ${port} 由本程式舊實例占用（PID ${ours.join("、")}）：請求優雅關閉…`);
+  // 【重連關鍵】強殺會硬斷 COM 控制代碼使 CH340 驅動卡死（下次開埠 SetCommState error 31，需重插）；
+  // 故先請舊實例優雅關閉，讓它 flush＋close 序列埠後退出，交接才乾淨。
+  log.notice(`埠 ${port} 由本程式舊實例占用（PID ${ours.join("、")}）：請求優雅關閉…`);
   if ((await requestGracefulShutdown(port)) && (await waitForPidsExit(ours, GRACEFUL_EXIT_TIMEOUT_MS))) {
-    log.info("舊實例已優雅結束（序列埠已乾淨釋放），接手啟動。");
+    log.notice("舊實例已優雅結束（序列埠已乾淨釋放），接手啟動。");
     return true;
   }
 
@@ -129,7 +125,7 @@ export async function freePortIfOwnedByUs(port: number, log: Logger): Promise<bo
       continue;
     }
     try {
-      log.warn(`舊實例（PID ${pid}）未回應優雅關閉，強制結束以接手（COM 埠可能需重插或自動重啟 USB 才能恢復）…`);
+      log.notice(`舊實例（PID ${pid}）未回應優雅關閉，強制結束以接手（COM 埠可能需重插或自動重啟 USB 才能恢復）…`);
       await killPid(pid);
       killed = true;
     } catch (err) {
